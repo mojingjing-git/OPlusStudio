@@ -1,0 +1,15 @@
+{
+  "product": "ZD O+ (older KeyLinker model)",
+  "evidence": "Owner read these values in KeyLinker on 2026-11-16; not yet queried by this PC",
+  "keylinker_vid": "1005",
+  "keylinker_pid": "2001",
+  "firmware": "1.37",
+  "game_link": "2.4 GHz receiver",
+  "usb_compatible_vid": "045E",
+  "usb_compatible_pid": "028E",
+  "ble_name": null,
+  "ble_service_confirmed": false,
+  "protocol_generation": null,
+  "independent_rear_inputs_confirmed": false,
+  "settings_writes_verified": []
+}

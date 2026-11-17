@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+build/
+dist/
+native/target/
+native/ui/node_modules/
+native/ui/dist/
+releases/
+research/
+reports/
+.learnings/

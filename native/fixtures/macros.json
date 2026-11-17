@@ -1,0 +1,383 @@
+[
+  {
+    "change": {
+      "kind": "hold",
+      "keys": [
+        1
+      ]
+    },
+    "payload": "0700008810000000"
+  },
+  {
+    "change": {
+      "kind": "hold",
+      "keys": [
+        2
+      ]
+    },
+    "payload": "0700008820000000"
+  },
+  {
+    "change": {
+      "kind": "hold",
+      "keys": [
+        3
+      ]
+    },
+    "payload": "0700008840000000"
+  },
+  {
+    "change": {
+      "kind": "hold",
+      "keys": [
+        4
+      ]
+    },
+    "payload": "0700008880000000"
+  },
+  {
+    "change": {
+      "kind": "hold",
+      "keys": [
+        5
+      ]
+    },
+    "payload": "0700008800010000"
+  },
+  {
+    "change": {
+      "kind": "hold",
+      "keys": [
+        6
+      ]
+    },
+    "payload": "0700008800020000"
+  },
+  {
+    "change": {
+      "kind": "hold",
+      "keys": [
+        7
+      ]
+    },
+    "payload": "0700008800040000"
+  },
+  {
+    "change": {
+      "kind": "hold",
+      "keys": [
+        8
+      ]
+    },
+    "payload": "0700008800080000"
+  },
+  {
+    "change": {
+      "kind": "hold",
+      "keys": [
+        13
+      ]
+    },
+    "payload": "0700008801000000"
+  },
+  {
+    "change": {
+      "kind": "hold",
+      "keys": [
+        14
+      ]
+    },
+    "payload": "0700008802000000"
+  },
+  {
+    "change": {
+      "kind": "hold",
+      "keys": [
+        15
+      ]
+    },
+    "payload": "0700008804000000"
+  },
+  {
+    "change": {
+      "kind": "hold",
+      "keys": [
+        16
+      ]
+    },
+    "payload": "0700008808000000"
+  },
+  {
+    "change": {
+      "kind": "hold",
+      "keys": [
+        11
+      ]
+    },
+    "payload": "0700008800100000"
+  },
+  {
+    "change": {
+      "kind": "hold",
+      "keys": [
+        12
+      ]
+    },
+    "payload": "0700008800200000"
+  },
+  {
+    "change": {
+      "kind": "hold",
+      "keys": [
+        93
+      ]
+    },
+    "payload": "0700008800400000"
+  },
+  {
+    "change": {
+      "kind": "hold",
+      "keys": [
+        94
+      ]
+    },
+    "payload": "0700008800800000"
+  },
+  {
+    "change": {
+      "kind": "hold",
+      "keys": [
+        1,
+        2,
+        5
+      ]
+    },
+    "payload": "0700008830010000"
+  },
+  {
+    "change": {
+      "kind": "hold",
+      "keys": [
+        93,
+        94
+      ]
+    },
+    "payload": "0700008800c00000"
+  },
+  {
+    "change": {
+      "kind": "macro",
+      "sequence": "A:100/60, B:80/0",
+      "trigger": 0,
+      "loop_ms": 0
+    },
+    "payload": "11000088100014008800000c008820001000"
+  },
+  {
+    "change": {
+      "kind": "macro",
+      "sequence": "A:100/60, B:80/0",
+      "trigger": 0,
+      "loop_ms": 100
+    },
+    "payload": "11140088100014008800000c008820001000"
+  },
+  {
+    "change": {
+      "kind": "macro",
+      "sequence": "A:100/60, B:80/0",
+      "trigger": 0,
+      "loop_ms": 20000
+    },
+    "payload": "11a00f88100014008800000c008820001000"
+  },
+  {
+    "change": {
+      "kind": "macro",
+      "sequence": "A:100/60, B:80/0",
+      "trigger": 1,
+      "loop_ms": 0
+    },
+    "payload": "11008088100014008800000c008820001000"
+  },
+  {
+    "change": {
+      "kind": "macro",
+      "sequence": "A:100/60, B:80/0",
+      "trigger": 1,
+      "loop_ms": 100
+    },
+    "payload": "11148088100014008800000c008820001000"
+  },
+  {
+    "change": {
+      "kind": "macro",
+      "sequence": "A:100/60, B:80/0",
+      "trigger": 1,
+      "loop_ms": 20000
+    },
+    "payload": "11a08f88100014008800000c008820001000"
+  },
+  {
+    "change": {
+      "kind": "macro",
+      "sequence": "LS_UP+RT:100/0, RS_DOWN_LEFT:200/100",
+      "trigger": 0,
+      "loop_ms": 0
+    },
+    "payload": "110000800008140058000028008800001400"
+  },
+  {
+    "change": {
+      "kind": "macro",
+      "sequence": "LS_UP+RT:100/0, RS_DOWN_LEFT:200/100",
+      "trigger": 0,
+      "loop_ms": 100
+    },
+    "payload": "111400800008140058000028008800001400"
+  },
+  {
+    "change": {
+      "kind": "macro",
+      "sequence": "LS_UP+RT:100/0, RS_DOWN_LEFT:200/100",
+      "trigger": 0,
+      "loop_ms": 20000
+    },
+    "payload": "11a00f800008140058000028008800001400"
+  },
+  {
+    "change": {
+      "kind": "macro",
+      "sequence": "LS_UP+RT:100/0, RS_DOWN_LEFT:200/100",
+      "trigger": 1,
+      "loop_ms": 0
+    },
+    "payload": "110080800008140058000028008800001400"
+  },
+  {
+    "change": {
+      "kind": "macro",
+      "sequence": "LS_UP+RT:100/0, RS_DOWN_LEFT:200/100",
+      "trigger": 1,
+      "loop_ms": 100
+    },
+    "payload": "111480800008140058000028008800001400"
+  },
+  {
+    "change": {
+      "kind": "macro",
+      "sequence": "LS_UP+RT:100/0, RS_DOWN_LEFT:200/100",
+      "trigger": 1,
+      "loop_ms": 20000
+    },
+    "payload": "11a08f800008140058000028008800001400"
+  },
+  {
+    "change": {
+      "kind": "macro",
+      "sequence": "DPAD_DOWN:120/0",
+      "trigger": 0,
+      "loop_ms": 0
+    },
+    "payload": "0700008801001800"
+  },
+  {
+    "change": {
+      "kind": "macro",
+      "sequence": "DPAD_DOWN:120/0",
+      "trigger": 0,
+      "loop_ms": 100
+    },
+    "payload": "0714008801001800"
+  },
+  {
+    "change": {
+      "kind": "macro",
+      "sequence": "DPAD_DOWN:120/0",
+      "trigger": 0,
+      "loop_ms": 20000
+    },
+    "payload": "07a00f8801001800"
+  },
+  {
+    "change": {
+      "kind": "macro",
+      "sequence": "DPAD_DOWN:120/0",
+      "trigger": 1,
+      "loop_ms": 0
+    },
+    "payload": "0700808801001800"
+  },
+  {
+    "change": {
+      "kind": "macro",
+      "sequence": "DPAD_DOWN:120/0",
+      "trigger": 1,
+      "loop_ms": 100
+    },
+    "payload": "0714808801001800"
+  },
+  {
+    "change": {
+      "kind": "macro",
+      "sequence": "DPAD_DOWN:120/0",
+      "trigger": 1,
+      "loop_ms": 20000
+    },
+    "payload": "07a08f8801001800"
+  },
+  {
+    "change": {
+      "kind": "macro",
+      "sequence": "LB+RB:50/50, X:50/50",
+      "trigger": 0,
+      "loop_ms": 0
+    },
+    "payload": "1600008800030a008800000a008840000a008800000a00"
+  },
+  {
+    "change": {
+      "kind": "macro",
+      "sequence": "LB+RB:50/50, X:50/50",
+      "trigger": 0,
+      "loop_ms": 100
+    },
+    "payload": "1614008800030a008800000a008840000a008800000a00"
+  },
+  {
+    "change": {
+      "kind": "macro",
+      "sequence": "LB+RB:50/50, X:50/50",
+      "trigger": 0,
+      "loop_ms": 20000
+    },
+    "payload": "16a00f8800030a008800000a008840000a008800000a00"
+  },
+  {
+    "change": {
+      "kind": "macro",
+      "sequence": "LB+RB:50/50, X:50/50",
+      "trigger": 1,
+      "loop_ms": 0
+    },
+    "payload": "1600808800030a008800000a008840000a008800000a00"
+  },
+  {
+    "change": {
+      "kind": "macro",
+      "sequence": "LB+RB:50/50, X:50/50",
+      "trigger": 1,
+      "loop_ms": 100
+    },
+    "payload": "1614808800030a008800000a008840000a008800000a00"
+  },
+  {
+    "change": {
+      "kind": "macro",
+      "sequence": "LB+RB:50/50, X:50/50",
+      "trigger": 1,
+      "loop_ms": 20000
+    },
+    "payload": "16a08f8800030a008800000a008840000a008800000a00"
+  }
+]

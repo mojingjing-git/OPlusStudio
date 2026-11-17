@@ -1,0 +1,314 @@
+{
+  "timestamp": "2026-11-16T20:41:40.529566+00:00",
+  "address": "AA:BB:CC:DD:EE:FF",
+  "identity": {
+    "vid": "1005",
+    "pid": "2001",
+    "version_bytes": "0137",
+    "raw": "10 05 20 01 01 37 56",
+    "version_display": "1.37",
+    "mode": 6,
+    "sensor": 1,
+    "generation": 2
+  },
+  "raw": {
+    "all_keys": {
+      "declared": 8,
+      "hex": "17 01 88 0b 89 5d 85 68",
+      "text": null
+    },
+    "remap_keys": {
+      "declared": 9,
+      "hex": "10 01 88 0d 84 0b 82 5d 82",
+      "text": null
+    },
+    "macro_keys": {
+      "declared": 11,
+      "hex": "12 12 13 0d 84 01 88 0b 82 5d 82",
+      "text": null
+    },
+    "sticks": {
+      "declared": 14,
+      "hex": "06 08 55 55 aa aa 00 06 08 55 55 aa aa 00",
+      "text": null
+    },
+    "triggers": {
+      "declared": 14,
+      "hex": "04 02 55 55 aa aa 00 04 02 55 55 aa aa 00",
+      "text": null
+    },
+    "motors": {
+      "declared": 8,
+      "hex": "bf bf 4c 4c 20 bf 02 00",
+      "text": null
+    },
+    "remapping": {
+      "declared": 16,
+      "hex": "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+      "text": null
+    },
+    "lighting": {
+      "declared": 24,
+      "hex": "ff ff ff 00 00 20 00 ff 00 10 00 40 00 00 ff 40 80 80 80 80 80 a0 80 ff",
+      "text": null
+    },
+    "macro_0": {
+      "declared": 7,
+      "hex": "00 00 88 01 00 18 00",
+      "text": null
+    },
+    "macro_1": {
+      "declared": 7,
+      "hex": "00 00 88 20 00 12 00",
+      "text": null
+    },
+    "macro_2": {
+      "declared": 7,
+      "hex": "00 00 88 01 00 1c 00",
+      "text": null
+    },
+    "macro_3": {
+      "declared": 7,
+      "hex": "00 00 88 00 08 00 00",
+      "text": null
+    },
+    "macro_4": {
+      "declared": 7,
+      "hex": "00 00 88 00 01 00 00",
+      "text": null
+    },
+    "macro_5": {
+      "declared": 7,
+      "hex": "00 00 88 00 02 00 00",
+      "text": null
+    }
+  },
+  "decoded": {
+    "capabilities": {
+      "sticks": 3,
+      "triggers": 3,
+      "motors": 15,
+      "turbo": 0,
+      "macros": 63,
+      "changekey": 1,
+      "lighting": 11,
+      "engine": 0,
+      "nfc": 192,
+      "sensor": 0,
+      "raw": "03030f003f010b00c000"
+    },
+    "all_keys": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      93,
+      94,
+      95,
+      96,
+      97,
+      104
+    ],
+    "remap_keys": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      13,
+      14,
+      15,
+      16,
+      11,
+      12,
+      93,
+      94
+    ],
+    "macro_keys": [
+      18,
+      19,
+      13,
+      14,
+      15,
+      16,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      11,
+      12,
+      93,
+      94
+    ],
+    "sticks": [
+      {
+        "inner_deadzone": 6,
+        "outer_raw": 8,
+        "point1": [
+          85,
+          85
+        ],
+        "point2": [
+          170,
+          170
+        ],
+        "flags": 0,
+        "max_progress": 100
+      },
+      {
+        "inner_deadzone": 6,
+        "outer_raw": 8,
+        "point1": [
+          85,
+          85
+        ],
+        "point2": [
+          170,
+          170
+        ],
+        "flags": 0,
+        "max_progress": 100
+      }
+    ],
+    "triggers": [
+      {
+        "inner_deadzone": 4,
+        "outer_raw": 2,
+        "point1": [
+          85,
+          85
+        ],
+        "point2": [
+          170,
+          170
+        ],
+        "flags": 0,
+        "max_progress": 200
+      },
+      {
+        "inner_deadzone": 4,
+        "outer_raw": 2,
+        "point1": [
+          85,
+          85
+        ],
+        "point2": [
+          170,
+          170
+        ],
+        "flags": 0,
+        "max_progress": 200
+      }
+    ],
+    "motors": [
+      191,
+      191,
+      76,
+      76,
+      32,
+      191,
+      2,
+      0
+    ],
+    "remapping": {},
+    "lighting": [
+      {
+        "r": 255,
+        "g": 255,
+        "b": 255,
+        "data4": 0,
+        "data5": 0,
+        "light": 32
+      },
+      {
+        "r": 0,
+        "g": 255,
+        "b": 0,
+        "data4": 16,
+        "data5": 0,
+        "light": 64
+      },
+      {
+        "r": 0,
+        "g": 0,
+        "b": 255,
+        "data4": 64,
+        "data5": 128,
+        "light": 128
+      },
+      {
+        "r": 128,
+        "g": 128,
+        "b": 128,
+        "data4": 160,
+        "data5": 128,
+        "light": 255
+      }
+    ],
+    "macros": [
+      {
+        "slot": 0,
+        "sequence": "DPAD_DOWN:120/0",
+        "loop_ms": 0,
+        "trigger": 0
+      },
+      {
+        "slot": 1,
+        "sequence": "B:90/0",
+        "loop_ms": 0,
+        "trigger": 0
+      },
+      {
+        "slot": 2,
+        "sequence": "DPAD_DOWN:140/0",
+        "loop_ms": 0,
+        "trigger": 0
+      },
+      {
+        "slot": 3,
+        "sequence": "RT:0/0",
+        "loop_ms": 0,
+        "trigger": 0
+      },
+      {
+        "slot": 4,
+        "sequence": "LB:0/0",
+        "loop_ms": 0,
+        "trigger": 0
+      },
+      {
+        "slot": 5,
+        "sequence": "RB:0/0",
+        "loop_ms": 0,
+        "trigger": 0
+      }
+    ]
+  },
+  "errors": [],
+  "capabilities": {
+    "declared": 10,
+    "hex": "03 03 0f 00 3f 01 0b 00 c0 00",
+    "text": null
+  },
+  "backup_path": "C:\\Users\\user\\AppData\\Local\\OPlusStudio\\backups\\oplus-1.37-20261117-044141-207571.json"
+}

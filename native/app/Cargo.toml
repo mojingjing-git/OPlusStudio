@@ -1,0 +1,21 @@
+[package]
+name = "oplus-studio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[dependencies]
+oplus-core = { path = "../crates/oplus-core" }
+oplus-device = { path = "../crates/oplus-device" }
+tauri = "=2.12.6"
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+rfd = "0.17"
+
+[build-dependencies]
+tauri-build = "2"
