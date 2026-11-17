@@ -83,6 +83,44 @@ pub fn boundary(snapshot: &Snapshot, key: &str, original: &[u8], target: &[u8]) 
     if key.starts_with("macro_") && (original == [0] || target == [0]) {
         return Err("空背键记录的写入与恢复尚未验证".into());
     }
+    if key == "sticks" {
+        let caps = snapshot.parsed_capabilities()?;
+        if original.len() != 15
+            || target.len() != 15
+            || original[0] != 14
+            || target[0] != 14
+        {
+            return Err("摇杆记录长度不匹配".into());
+        }
+        for side in 0..2u8 {
+            let off = 1 + (side as usize) * 7;
+            if !caps.has_stick_side(side) && original[off..off + 7] != target[off..off + 7] {
+                return Err("不能修改未启用的摇杆通道".into());
+            }
+            if (original[off + 6] & 0xF8) != (target[off + 6] & 0xF8) {
+                return Err("不能修改摇杆的未知标志位".into());
+            }
+        }
+    }
+    if key == "triggers" {
+        let caps = snapshot.parsed_capabilities()?;
+        if original.len() != 15
+            || target.len() != 15
+            || original[0] != 14
+            || target[0] != 14
+        {
+            return Err("扳机记录长度不匹配".into());
+        }
+        for side in 0..2u8 {
+            let off = 1 + (side as usize) * 7;
+            if !caps.has_trigger_side(side) && original[off..off + 7] != target[off..off + 7] {
+                return Err("不能修改未启用的扳机通道".into());
+            }
+            if original[off + 6] != target[off + 6] {
+                return Err("不能修改扳机的未知标志位".into());
+            }
+        }
+    }
     if key == "motors" {
         let caps = snapshot.parsed_capabilities()?;
         if original.len() < 5 || target.len() != original.len() || original[5..] != target[5..] {
@@ -125,7 +163,7 @@ pub async fn prepare(
         return Err("当前设备处于只读诊断模式，禁止写入配置".into());
     }
     snapshot.validate_rear()?;
-    if edits.len() > 16 {
+    if edits.len() > 20 {
         return Err("单次事务修改记录数超出上限".into());
     }
     let mut seen = BTreeSet::new();
@@ -357,7 +395,7 @@ pub fn validate_journal(root: &Path, j: &Journal) -> Result<Snapshot> {
         || j.identity.effective_generation() != 2
         || j.id.is_empty()
         || !j.id.chars().all(|c| c.is_ascii_digit() || c == '-')
-        || j.records.len() > 16
+        || j.records.len() > 20
     {
         return Err("日志格式无效".into());
     }

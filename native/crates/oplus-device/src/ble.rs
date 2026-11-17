@@ -486,6 +486,18 @@ impl Device for Session {
             (0x35, Some(slot))
         } else {
             let op = match key {
+                "sticks" => {
+                    if payload.len() != 15 {
+                        return Err("摇杆记录长度超出安全边界".into());
+                    }
+                    0x31
+                }
+                "triggers" => {
+                    if payload.len() != 15 {
+                        return Err("扳机记录长度超出安全边界".into());
+                    }
+                    0x32
+                }
                 "motors" => {
                     if !(5..=240).contains(&payload.len()) {
                         return Err("马达记录长度超出安全边界".into());
@@ -553,6 +565,8 @@ pub fn read_spec(key: &str) -> Result<(u8, Vec<u8>)> {
         return Err("无效槽位".into());
     }
     let op = match key {
+        "sticks" => 0xb1,
+        "triggers" => 0xb2,
         "motors" => 0xb3,
         "remapping" => 0xb6,
         "lighting" => 0xb7,

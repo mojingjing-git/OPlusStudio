@@ -8,6 +8,20 @@ pub const MACRO_KEYS: [u8; 18] = [
 ];
 pub const LABELS: [&str; 6] = ["M1", "M2", "LM", "RM", "LK", "RK"];
 pub const SLOT_ORDER: [&str; 8] = ["M1", "M2", "M3", "M4", "M5", "M6", "ML", "MR"];
+pub const STICK_MAX_PROGRESS: u8 = 100;
+pub const TRIGGER_MAX_PROGRESS: u8 = 200;
+pub const FLAG_INVERT_X: u8 = 0x01;
+pub const FLAG_INVERT_Y: u8 = 0x02;
+pub const FLAG_SWAP: u8 = 0x04;
+
+#[inline]
+pub const fn curve_side_mask(side: u8) -> u8 {
+    match side {
+        0 => 0x02, // Left channel (LS / LT) -> bit 1
+        1 => 0x01, // Right channel (RS / RT) -> bit 0
+        _ => 0,
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -53,6 +67,18 @@ impl Capabilities {
     }
     pub fn active_slots(&self) -> Vec<u8> {
         (0..8u8).filter(|&s| (self.macros >> s) & 1 != 0).collect()
+    }
+    pub fn has_stick_side(&self, side: u8) -> bool {
+        (self.sticks & curve_side_mask(side)) != 0
+    }
+    pub fn stick_sides(&self) -> Vec<u8> {
+        (0..2u8).filter(|&s| self.has_stick_side(s)).collect()
+    }
+    pub fn has_trigger_side(&self, side: u8) -> bool {
+        (self.triggers & curve_side_mask(side)) != 0
+    }
+    pub fn trigger_sides(&self) -> Vec<u8> {
+        (0..2u8).filter(|&s| self.has_trigger_side(s)).collect()
     }
     pub fn motor_channels(&self) -> Vec<u8> {
         (0..4u8).filter(|&c| (self.motors >> c) & 1 != 0).collect()
@@ -181,8 +207,30 @@ impl Snapshot {
         let Ok(caps) = self.parsed_capabilities() else {
             return SupportTier::ReadOnly;
         };
-        if caps.macros == 0 && caps.motors == 0 && caps.changekey == 0 && caps.lighting == 0 {
+        if (caps.sticks & 0x03) == 0
+            && (caps.triggers & 0x03) == 0
+            && caps.macros == 0
+            && caps.motors == 0
+            && caps.changekey == 0
+            && caps.lighting == 0
+        {
             return SupportTier::ReadOnly;
+        }
+        if caps.sticks != 0 {
+            let Ok(st) = self.record("sticks") else {
+                return SupportTier::ReadOnly;
+            };
+            if st.len() != 15 {
+                return SupportTier::ReadOnly;
+            }
+        }
+        if caps.triggers != 0 {
+            let Ok(tr) = self.record("triggers") else {
+                return SupportTier::ReadOnly;
+            };
+            if tr.len() != 15 {
+                return SupportTier::ReadOnly;
+            }
         }
         if caps.macros != 0 {
             let slots = caps.active_slots();
@@ -777,6 +825,40 @@ pub fn form(snapshot: &Snapshot, slot: u8) -> Result<Change> {
     }
 }
 
+pub fn validate_curve_channel(ch: &[u8], max_progress: u8) -> Result<()> {
+    if ch.len() != 7 {
+        return Err("曲线通道长度必须为 7 字节".into());
+    }
+    let inner = ch[0];
+    let outer_raw = ch[1];
+    if inner > max_progress || outer_raw > max_progress {
+        return Err(format!("死区超出有效范围 0–{max_progress}"));
+    }
+    if (inner as u16) + (outer_raw as u16) >= (max_progress as u16) {
+        return Err("内死区与外死区之和必须小于最大行程，以保留有效触发区间".into());
+    }
+    if ch[2] > ch[4] {
+        return Err("响应曲线控制点 P1 的横坐标不能大于 P2".into());
+    }
+    Ok(())
+}
+
+fn parse_curve_point(val: &Value, name: &str) -> Result<[u8; 2]> {
+    let arr = val
+        .as_array()
+        .filter(|a| a.len() == 2)
+        .ok_or_else(|| format!("{name} 必须为两个 0–255 坐标"))?;
+    let x = arr[0]
+        .as_u64()
+        .filter(|&v| v <= 255)
+        .ok_or_else(|| format!("{name}.x 超出 0–255"))? as u8;
+    let y = arr[1]
+        .as_u64()
+        .filter(|&v| v <= 255)
+        .ok_or_else(|| format!("{name}.y 超出 0–255"))? as u8;
+    Ok([x, y])
+}
+
 pub fn validate_record(snapshot: &Snapshot, key: &str, p: &[u8]) -> Result<()> {
     if snapshot.support_tier() == SupportTier::ReadOnly {
         return Err("当前设备处于只读模式，禁止写入配置".into());
@@ -792,6 +874,36 @@ pub fn validate_record(snapshot: &Snapshot, key: &str, p: &[u8]) -> Result<()> {
             snapshot.layout()?.validate(p)?;
             if p != [0] && (p.len() - 3) / 5 > snapshot.slot_step_limit(slot) {
                 return Err("宏步骤数超出该槽位上限".into());
+            }
+        }
+        "sticks" => {
+            if (caps.sticks & 0x03) == 0 {
+                return Err("设备不支持摇杆配置".into());
+            }
+            let orig = snapshot.record("sticks")?;
+            if orig.len() != 15 || p.len() != 15 || record.declared != 14 {
+                return Err("摇杆记录长度不匹配".into());
+            }
+            for side in 0..2u8 {
+                if caps.has_stick_side(side) {
+                    let off = 1 + (side as usize) * 7;
+                    validate_curve_channel(&p[off..off + 7], STICK_MAX_PROGRESS)?;
+                }
+            }
+        }
+        "triggers" => {
+            if (caps.triggers & 0x03) == 0 {
+                return Err("设备不支持扳机配置".into());
+            }
+            let orig = snapshot.record("triggers")?;
+            if orig.len() != 15 || p.len() != 15 || record.declared != 14 {
+                return Err("扳机记录长度不匹配".into());
+            }
+            for side in 0..2u8 {
+                if caps.has_trigger_side(side) {
+                    let off = 1 + (side as usize) * 7;
+                    validate_curve_channel(&p[off..off + 7], TRIGGER_MAX_PROGRESS)?;
+                }
             }
         }
         "motors" => {
@@ -859,6 +971,83 @@ pub fn desired_setting(snapshot: &Snapshot, feature: &str, change: &Value) -> Re
     let orig = normalize_payload_for(snapshot, feature, snapshot.record(feature)?);
     let mut p = orig.clone();
     match feature {
+        "sticks" => {
+            if (caps.sticks & 0x03) == 0 || p.len() != 15 || p[0] != 14 {
+                return Err("摇杆记录不可写或不完整".into());
+            }
+            let side = change["side"]
+                .as_u64()
+                .filter(|&s| s < 2)
+                .ok_or("无效摇杆通道")? as u8;
+            if !caps.has_stick_side(side) {
+                return Err("该摇杆通道未在设备上启用".into());
+            }
+            let inner = change["inner"]
+                .as_u64()
+                .filter(|&v| v <= STICK_MAX_PROGRESS as u64)
+                .ok_or("摇杆中心死区应为 0–100")? as u8;
+            let outer_raw = change["outer_raw"]
+                .as_u64()
+                .filter(|&v| v <= STICK_MAX_PROGRESS as u64)
+                .ok_or("摇杆外死区边距应为 0–100")? as u8;
+            let point1 = parse_curve_point(&change["point1"], "point1")?;
+            let point2 = parse_curve_point(&change["point2"], "point2")?;
+            let invert_x = change["invert_x"].as_bool().ok_or("缺少 invert_x 布尔值")?;
+            let invert_y = change["invert_y"].as_bool().ok_or("缺少 invert_y 布尔值")?;
+            let swap = change["swap"].as_bool().ok_or("缺少 swap 布尔值")?;
+
+            let off = 1 + (side as usize) * 7;
+            let preserved_flags = orig[off + 6] & 0xF8;
+            let low_flags = (if invert_x { FLAG_INVERT_X } else { 0 })
+                | (if invert_y { FLAG_INVERT_Y } else { 0 })
+                | (if swap { FLAG_SWAP } else { 0 });
+            let ch = [
+                inner,
+                outer_raw,
+                point1[0],
+                point1[1],
+                point2[0],
+                point2[1],
+                preserved_flags | low_flags,
+            ];
+            validate_curve_channel(&ch, STICK_MAX_PROGRESS)?;
+            p[off..off + 7].copy_from_slice(&ch);
+        }
+        "triggers" => {
+            if (caps.triggers & 0x03) == 0 || p.len() != 15 || p[0] != 14 {
+                return Err("扳机记录不可写或不完整".into());
+            }
+            let side = change["side"]
+                .as_u64()
+                .filter(|&s| s < 2)
+                .ok_or("无效扳机通道")? as u8;
+            if !caps.has_trigger_side(side) {
+                return Err("该扳机通道未在设备上启用".into());
+            }
+            let inner = change["inner"]
+                .as_u64()
+                .filter(|&v| v <= TRIGGER_MAX_PROGRESS as u64)
+                .ok_or("扳机起始死区应为 0–200")? as u8;
+            let outer_raw = change["outer_raw"]
+                .as_u64()
+                .filter(|&v| v <= TRIGGER_MAX_PROGRESS as u64)
+                .ok_or("扳机末端死区边距应为 0–200")? as u8;
+            let point1 = parse_curve_point(&change["point1"], "point1")?;
+            let point2 = parse_curve_point(&change["point2"], "point2")?;
+
+            let off = 1 + (side as usize) * 7;
+            let ch = [
+                inner,
+                outer_raw,
+                point1[0],
+                point1[1],
+                point2[0],
+                point2[1],
+                orig[off + 6],
+            ];
+            validate_curve_channel(&ch, TRIGGER_MAX_PROGRESS)?;
+            p[off..off + 7].copy_from_slice(&ch);
+        }
         "motors" => {
             if caps.motors == 0 || p.len() < 5 {
                 return Err("马达记录不可写或不完整".into());
@@ -1072,7 +1261,7 @@ pub fn diagnostic_bundle(snapshot: &Snapshot) -> Value {
     let caps = snapshot.parsed_capabilities().ok();
     json!({
         "format": "oplus-diagnostic-v1",
-        "app_version": "0.6.0",
+        "app_version": "0.7.0",
         "address": snapshot.address,
         "support_tier": tier,
         "effective_generation": snapshot.identity.effective_generation(),
@@ -1082,7 +1271,9 @@ pub fn diagnostic_bundle(snapshot: &Snapshot) -> Value {
         "capabilities_raw": snapshot.capabilities,
         "capabilities_decoded": caps.as_ref().map(|c| json!({
             "sticks": c.sticks,
+            "stick_sides": c.stick_sides(),
             "triggers": c.triggers,
+            "trigger_sides": c.trigger_sides(),
             "motors": c.motors,
             "motor_channels": c.motor_channels(),
             "turbo": c.turbo,

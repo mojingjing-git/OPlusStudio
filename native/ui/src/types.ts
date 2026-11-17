@@ -13,7 +13,9 @@ export type SupportTier = "verified" | "compatible" | "read_only";
 
 export type CapabilitiesInfo = {
   sticks: number;
+  stick_sides: number[];
   triggers: number;
+  trigger_sides: number[];
   motors: number;
   motor_channels: number[];
   macros: number;
@@ -24,6 +26,35 @@ export type CapabilitiesInfo = {
   lighting_zones: number[];
   has_per_slot_macro_limits: boolean;
 };
+
+export type StickCurveSetting = {
+  feature: "stick_curve";
+  side: number;
+  inner: number;
+  outer_raw: number;
+  point1: [number, number];
+  point2: [number, number];
+  invert_x: boolean;
+  invert_y: boolean;
+  swap: boolean;
+};
+
+export type TriggerCurveSetting = {
+  feature: "trigger_curve";
+  side: number;
+  inner: number;
+  outer_raw: number;
+  point1: [number, number];
+  point2: [number, number];
+};
+
+export type BoardSetting =
+  | StickCurveSetting
+  | TriggerCurveSetting
+  | { feature: "motors"; levels: [number, number, number, number] }
+  | { feature: "motor_channel"; channel: number; level: number }
+  | { feature: "remapping"; source: number; target: number }
+  | { feature: "lighting"; zone: number; rgb: string };
 
 export type Snapshot = {
   address: string;

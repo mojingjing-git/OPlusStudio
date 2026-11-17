@@ -294,6 +294,10 @@ export function readSpec(key: string): [number, number[]] {
     throw new Error("无效槽位");
   }
   switch (key) {
+    case "sticks":
+      return [0xb1, [0]];
+    case "triggers":
+      return [0xb2, [0]];
     case "motors":
       return [0xb3, [0]];
     case "remapping":
@@ -805,6 +809,16 @@ export class WebBleSession implements Device {
       }
       op = 0x35;
       slot = parsedSlot;
+    } else if (key === "sticks") {
+      if (payload.length !== 15) {
+        throw new Error("摇杆记录长度超出安全边界");
+      }
+      op = 0x31;
+    } else if (key === "triggers") {
+      if (payload.length !== 15) {
+        throw new Error("扳机记录长度超出安全边界");
+      }
+      op = 0x32;
     } else if (key === "motors") {
       if (payload.length < 5 || payload.length > 240) {
         throw new Error("马达记录长度超出安全边界");

@@ -121,7 +121,7 @@ export async function prepare(
     throw new Error("当前设备处于只读诊断模式，禁止写入配置");
   }
   validateRear(snapshot);
-  if (edits.length > 16) {
+  if (edits.length > 20) {
     throw new Error("单次事务修改记录数超出上限");
   }
 
@@ -360,7 +360,7 @@ export async function validateJournal(
     j.id.length === 0 ||
     !/^[0-9-]+$/.test(j.id) ||
     !Array.isArray(j.records) ||
-    j.records.length > 16
+    j.records.length > 20
   ) {
     throw new Error("日志格式无效");
   }

@@ -26,6 +26,8 @@ import {
   capabilityActiveSlots,
   capabilityLightingZones,
   capabilityMotorChannels,
+  capabilityStickSides,
+  capabilityTriggerSides,
   defaultKeymapStore,
   desiredSetting,
   diagnosticBundle,
@@ -249,7 +251,9 @@ async function buildView(snapshot: Snapshot): Promise<View> {
     capabilities_info: caps
       ? {
           sticks: caps.sticks,
+          stick_sides: capabilityStickSides(caps),
           triggers: caps.triggers,
+          trigger_sides: capabilityTriggerSides(caps),
           motors: caps.motors,
           motor_channels: capabilityMotorChannels(caps),
           macros: caps.macros,
@@ -424,7 +428,28 @@ async function dispatchRun(request: Record<string, any>): Promise<unknown> {
         for (const setting of settings) {
           let key: string;
           let changePayload: Record<string, unknown>;
-          if (setting.feature === "motors") {
+          if (setting.feature === "stick_curve") {
+            key = "sticks";
+            changePayload = {
+              side: setting.side,
+              inner: setting.inner,
+              outer_raw: setting.outer_raw,
+              point1: setting.point1,
+              point2: setting.point2,
+              invert_x: setting.invert_x,
+              invert_y: setting.invert_y,
+              swap: setting.swap,
+            };
+          } else if (setting.feature === "trigger_curve") {
+            key = "triggers";
+            changePayload = {
+              side: setting.side,
+              inner: setting.inner,
+              outer_raw: setting.outer_raw,
+              point1: setting.point1,
+              point2: setting.point2,
+            };
+          } else if (setting.feature === "motors") {
             key = "motors";
             changePayload = { levels: setting.levels };
           } else if (setting.feature === "motor_channel") {
@@ -550,7 +575,7 @@ export async function webInvoke<T = any>(
       return {
         address: cached?.address || savedDev?.address || "",
         recoveries,
-        version: "0.6.0",
+        version: "0.7.0",
         keymap,
         runner: webRunnerSnapshot(),
       } as T;

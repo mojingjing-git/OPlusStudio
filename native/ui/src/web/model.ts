@@ -23,6 +23,14 @@ import {
   padButtonToOnboardKey,
 } from "../types.ts";
 import {
+  FLAG_INVERT_X,
+  FLAG_INVERT_Y,
+  FLAG_SWAP,
+  STICK_MAX_PROGRESS,
+  TRIGGER_MAX_PROGRESS,
+  curveSideMask,
+} from "../curves.ts";
+import {
   type ByteSource,
   type Identity,
   effectiveGeneration,
@@ -165,6 +173,30 @@ export function capabilityActiveSlots(caps: Capabilities): number[] {
   const out: number[] = [];
   for (let s = 0; s < 8; s++) {
     if (((caps.macros >>> s) & 1) !== 0) out.push(s);
+  }
+  return out;
+}
+
+export function hasStickSide(caps: Capabilities, side: number): boolean {
+  return (caps.sticks & curveSideMask(side)) !== 0;
+}
+
+export function capabilityStickSides(caps: Capabilities): number[] {
+  const out: number[] = [];
+  for (let s = 0; s < 2; s++) {
+    if (hasStickSide(caps, s)) out.push(s);
+  }
+  return out;
+}
+
+export function hasTriggerSide(caps: Capabilities, side: number): boolean {
+  return (caps.triggers & curveSideMask(side)) !== 0;
+}
+
+export function capabilityTriggerSides(caps: Capabilities): number[] {
+  const out: number[] = [];
+  for (let s = 0; s < 2; s++) {
+    if (hasTriggerSide(caps, s)) out.push(s);
   }
   return out;
 }
@@ -603,12 +635,32 @@ export function supportTier(snapshot: Snapshot): SupportTier {
     return "read_only";
   }
   if (
+    (caps.sticks & 0x03) === 0 &&
+    (caps.triggers & 0x03) === 0 &&
     caps.macros === 0 &&
     caps.motors === 0 &&
     caps.changekey === 0 &&
     caps.lighting === 0
   ) {
     return "read_only";
+  }
+
+  if (caps.sticks !== 0) {
+    try {
+      const st = snapshotRecord(snapshot, "sticks");
+      if (st.length !== 15) return "read_only";
+    } catch {
+      return "read_only";
+    }
+  }
+
+  if (caps.triggers !== 0) {
+    try {
+      const tr = snapshotRecord(snapshot, "triggers");
+      if (tr.length !== 15) return "read_only";
+    } catch {
+      return "read_only";
+    }
   }
 
   if (caps.macros !== 0) {
@@ -887,6 +939,37 @@ export function form(snapshot: Snapshot, slot: number): Change {
   return { kind: "record", payload: hexSpaced(p) };
 }
 
+export function validateCurveChannel(ch: ByteSource, maxProgress: number): void {
+  if (ch.length !== 7) {
+    throw new Error("曲线通道长度必须为 7 字节");
+  }
+  const inner = ch[0] & 0xff;
+  const outerRaw = ch[1] & 0xff;
+  if (inner > maxProgress || outerRaw > maxProgress) {
+    throw new Error(`死区超出有效范围 0–${maxProgress}`);
+  }
+  if (inner + outerRaw >= maxProgress) {
+    throw new Error("内死区与外死区之和必须小于最大行程，以保留有效触发区间");
+  }
+  if ((ch[2] & 0xff) > (ch[4] & 0xff)) {
+    throw new Error("响应曲线控制点 P1 的横坐标不能大于 P2");
+  }
+}
+
+function parseCurvePoint(val: unknown, name: string): [number, number] {
+  if (!Array.isArray(val) || val.length !== 2) {
+    throw new Error(`${name} 必须为两个 0–255 坐标`);
+  }
+  const [x, y] = val;
+  if (typeof x !== "number" || !Number.isInteger(x) || x < 0 || x > 255) {
+    throw new Error(`${name}.x 超出 0–255`);
+  }
+  if (typeof y !== "number" || !Number.isInteger(y) || y < 0 || y > 255) {
+    throw new Error(`${name}.y 超出 0–255`);
+  }
+  return [x, y];
+}
+
 export function validateRecord(
   snapshot: Snapshot,
   key: string,
@@ -913,6 +996,42 @@ export function validateRecord(
       (p.length - 3) / 5 > snapshotSlotStepLimit(snapshot, slot)
     ) {
       throw new Error("宏步骤数超出该槽位上限");
+    }
+    return;
+  }
+
+  if (key === "sticks") {
+    if ((caps.sticks & 0x03) === 0) {
+      throw new Error("设备不支持摇杆配置");
+    }
+    const orig = snapshotRecord(snapshot, "sticks");
+    if (orig.length !== 15 || p.length !== 15 || record.declared !== 14) {
+      throw new Error("摇杆记录长度不匹配");
+    }
+    const arr = Array.from(p);
+    for (let side = 0; side < 2; side++) {
+      if (hasStickSide(caps, side)) {
+        const off = 1 + side * 7;
+        validateCurveChannel(arr.slice(off, off + 7), STICK_MAX_PROGRESS);
+      }
+    }
+    return;
+  }
+
+  if (key === "triggers") {
+    if ((caps.triggers & 0x03) === 0) {
+      throw new Error("设备不支持扳机配置");
+    }
+    const orig = snapshotRecord(snapshot, "triggers");
+    if (orig.length !== 15 || p.length !== 15 || record.declared !== 14) {
+      throw new Error("扳机记录长度不匹配");
+    }
+    const arr = Array.from(p);
+    for (let side = 0; side < 2; side++) {
+      if (hasTriggerSide(caps, side)) {
+        const off = 1 + side * 7;
+        validateCurveChannel(arr.slice(off, off + 7), TRIGGER_MAX_PROGRESS);
+      }
     }
     return;
   }
@@ -975,6 +1094,56 @@ export function boundary(
       (target.length === 1 && target[0] === 0))
   ) {
     throw new Error("空背键记录的写入与恢复尚未验证");
+  }
+  if (key === "sticks") {
+    const caps = parseCapabilities(snapshot.capabilities);
+    if (
+      original.length !== 15 ||
+      target.length !== 15 ||
+      (original[0] & 0xff) !== 14 ||
+      (target[0] & 0xff) !== 14
+    ) {
+      throw new Error("摇杆记录长度不匹配");
+    }
+    const origArr = Array.from(original);
+    const targArr = Array.from(target);
+    for (let side = 0; side < 2; side++) {
+      const off = 1 + side * 7;
+      if (
+        !hasStickSide(caps, side) &&
+        !bytesEqual(origArr.slice(off, off + 7), targArr.slice(off, off + 7))
+      ) {
+        throw new Error("不能修改未启用的摇杆通道");
+      }
+      if ((origArr[off + 6] & 0xf8) !== (targArr[off + 6] & 0xf8)) {
+        throw new Error("不能修改摇杆的未知标志位");
+      }
+    }
+  }
+  if (key === "triggers") {
+    const caps = parseCapabilities(snapshot.capabilities);
+    if (
+      original.length !== 15 ||
+      target.length !== 15 ||
+      (original[0] & 0xff) !== 14 ||
+      (target[0] & 0xff) !== 14
+    ) {
+      throw new Error("扳机记录长度不匹配");
+    }
+    const origArr = Array.from(original);
+    const targArr = Array.from(target);
+    for (let side = 0; side < 2; side++) {
+      const off = 1 + side * 7;
+      if (
+        !hasTriggerSide(caps, side) &&
+        !bytesEqual(origArr.slice(off, off + 7), targArr.slice(off, off + 7))
+      ) {
+        throw new Error("不能修改未启用的扳机通道");
+      }
+      if ((origArr[off + 6] & 0xff) !== (targArr[off + 6] & 0xff)) {
+        throw new Error("不能修改扳机的未知标志位");
+      }
+    }
   }
   if (key === "motors") {
     const caps = parseCapabilities(snapshot.capabilities);
@@ -1041,7 +1210,111 @@ export function desiredSetting(
   );
   const p = [...orig];
 
-  if (feature === "motors") {
+  if (feature === "sticks") {
+    if ((caps.sticks & 0x03) === 0 || p.length !== 15 || (p[0] & 0xff) !== 14) {
+      throw new Error("摇杆记录不可写或不完整");
+    }
+    const side = change.side;
+    if (typeof side !== "number" || !Number.isInteger(side) || side < 0 || side > 1) {
+      throw new Error("无效摇杆通道");
+    }
+    if (!hasStickSide(caps, side)) {
+      throw new Error("该摇杆通道未在设备上启用");
+    }
+    const inner = change.inner;
+    const outerRaw = change.outer_raw;
+    if (
+      typeof inner !== "number" ||
+      !Number.isInteger(inner) ||
+      inner < 0 ||
+      inner > STICK_MAX_PROGRESS
+    ) {
+      throw new Error("摇杆中心死区应为 0–100");
+    }
+    if (
+      typeof outerRaw !== "number" ||
+      !Number.isInteger(outerRaw) ||
+      outerRaw < 0 ||
+      outerRaw > STICK_MAX_PROGRESS
+    ) {
+      throw new Error("摇杆外死区边距应为 0–100");
+    }
+    const point1 = parseCurvePoint(change.point1, "point1");
+    const point2 = parseCurvePoint(change.point2, "point2");
+    if (typeof change.invert_x !== "boolean") {
+      throw new Error("缺少 invert_x 布尔值");
+    }
+    if (typeof change.invert_y !== "boolean") {
+      throw new Error("缺少 invert_y 布尔值");
+    }
+    if (typeof change.swap !== "boolean") {
+      throw new Error("缺少 swap 布尔值");
+    }
+    const off = 1 + side * 7;
+    const preservedFlags = orig[off + 6] & 0xf8;
+    const lowFlags =
+      (change.invert_x ? FLAG_INVERT_X : 0) |
+      (change.invert_y ? FLAG_INVERT_Y : 0) |
+      (change.swap ? FLAG_SWAP : 0);
+    const ch = [
+      inner,
+      outerRaw,
+      point1[0],
+      point1[1],
+      point2[0],
+      point2[1],
+      preservedFlags | lowFlags,
+    ];
+    validateCurveChannel(ch, STICK_MAX_PROGRESS);
+    for (let i = 0; i < 7; i++) {
+      p[off + i] = ch[i];
+    }
+  } else if (feature === "triggers") {
+    if ((caps.triggers & 0x03) === 0 || p.length !== 15 || (p[0] & 0xff) !== 14) {
+      throw new Error("扳机记录不可写或不完整");
+    }
+    const side = change.side;
+    if (typeof side !== "number" || !Number.isInteger(side) || side < 0 || side > 1) {
+      throw new Error("无效扳机通道");
+    }
+    if (!hasTriggerSide(caps, side)) {
+      throw new Error("该扳机通道未在设备上启用");
+    }
+    const inner = change.inner;
+    const outerRaw = change.outer_raw;
+    if (
+      typeof inner !== "number" ||
+      !Number.isInteger(inner) ||
+      inner < 0 ||
+      inner > TRIGGER_MAX_PROGRESS
+    ) {
+      throw new Error("扳机起始死区应为 0–200");
+    }
+    if (
+      typeof outerRaw !== "number" ||
+      !Number.isInteger(outerRaw) ||
+      outerRaw < 0 ||
+      outerRaw > TRIGGER_MAX_PROGRESS
+    ) {
+      throw new Error("扳机末端死区边距应为 0–200");
+    }
+    const point1 = parseCurvePoint(change.point1, "point1");
+    const point2 = parseCurvePoint(change.point2, "point2");
+    const off = 1 + side * 7;
+    const ch = [
+      inner,
+      outerRaw,
+      point1[0],
+      point1[1],
+      point2[0],
+      point2[1],
+      orig[off + 6] & 0xff,
+    ];
+    validateCurveChannel(ch, TRIGGER_MAX_PROGRESS);
+    for (let i = 0; i < 7; i++) {
+      p[off + i] = ch[i];
+    }
+  } else if (feature === "motors") {
     if (caps.motors === 0 || p.length < 5) {
       throw new Error("马达记录不可写或不完整");
     }
@@ -1334,7 +1607,7 @@ export function diagnosticBundle(snapshot: Snapshot): Record<string, unknown> {
   }
   return {
     format: "oplus-diagnostic-v1",
-    app_version: "0.6.0",
+    app_version: "0.7.0",
     address: snapshot.address,
     support_tier: tier,
     effective_generation: effectiveGeneration(snapshot.identity),
@@ -1345,7 +1618,9 @@ export function diagnosticBundle(snapshot: Snapshot): Record<string, unknown> {
     capabilities_decoded: caps
       ? {
           sticks: caps.sticks,
+          stick_sides: capabilityStickSides(caps),
           triggers: caps.triggers,
+          trigger_sides: capabilityTriggerSides(caps),
           motors: caps.motors,
           motor_channels: capabilityMotorChannels(caps),
           turbo: caps.turbo,

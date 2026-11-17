@@ -1,5 +1,5 @@
 /* ==========================================================================
-   O+ Studio 0.6.0 — Apple iOS 26 / macOS Tahoe 26 "Liquid Glass" Design System
+   O+ Studio 0.7.0 — Apple iOS 26 / macOS Tahoe 26 "Liquid Glass" Design System
    Optical Specular Rim · Ambient Refraction · Concentric Squircle & Capsule UI
    ========================================================================== */
 
@@ -652,18 +652,19 @@ summary {
   border-radius: 1.5rem;
   box-shadow: var(--specular-panel);
   color: var(--text);
-  padding: 1.15rem 0.8rem 0.85rem;
+  padding: 0.95rem 0.76rem 0.75rem;
   display: flex;
   flex-direction: column;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 0.72rem;
-  padding: 0.15rem 0.45rem 1.15rem;
+  gap: 0.68rem;
+  padding: 0.1rem 0.42rem 0.88rem;
 }
 
 .brand-orb {
@@ -724,14 +725,14 @@ summary {
 
 .sidebar nav {
   display: grid;
-  gap: 0.3rem;
+  gap: 0.22rem;
 }
 
 .sidebar button {
   justify-content: flex-start;
   border: 1px solid transparent;
   outline: none;
-  border-radius: 0.92rem;
+  border-radius: 0.88rem;
   background: transparent;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
@@ -739,8 +740,8 @@ summary {
   color: var(--muted);
   font-weight: 580;
   width: 100%;
-  min-height: 2.52rem;
-  padding: 0.55rem 0.78rem;
+  min-height: 2.34rem;
+  padding: 0.46rem 0.74rem;
 }
 
 .sidebar button:hover:not(:disabled) {
@@ -779,15 +780,15 @@ html[data-theme="dark"] .sidebar nav button.active {
 
 .sidebar-bottom {
   margin-top: auto;
-  padding-top: 0.75rem;
+  padding-top: 0.55rem;
   display: grid;
-  gap: 0.25rem;
+  gap: 0.2rem;
 }
 
 .scope {
-  padding: 0.6rem 0.75rem;
-  margin-bottom: 0.25rem;
-  border-radius: 0.95rem;
+  padding: 0.52rem 0.7rem;
+  margin-bottom: 0.18rem;
+  border-radius: 0.92rem;
   background: var(--glass-recessed);
   border: 1px solid var(--glass-border-subtle);
   font-size: 0.78rem;
@@ -2913,6 +2914,372 @@ html[data-theme="light"] .sync-tag.ok {
 }
 
 /* ==========================================================================
+   0.7.0 Stick & Trigger Onboard Curves Studio (Liquid Glass Edition)
+   ========================================================================== */
+
+.curves-page {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.curves-header-bar {
+  padding: 0.65rem 0.95rem;
+}
+
+.curves-segmented {
+  margin: 0;
+}
+
+.curves-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.15rem;
+  align-items: start;
+  min-width: 0;
+}
+
+.curve-card {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.curve-card.disabled-card {
+  opacity: 0.78;
+}
+
+.curve-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.65rem;
+  padding-bottom: 0.8rem;
+  border-bottom: 1px solid var(--glass-divider);
+}
+
+.curve-card-badges {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.curve-canvas-block {
+  display: grid;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.curve-canvas-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+}
+
+.curve-telemetry-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.16rem 0.62rem;
+  border-radius: 999px;
+  background: var(--emerald-tint);
+  border: 1px solid rgba(18, 183, 106, 0.32);
+  color: var(--emerald);
+  font-size: 0.72rem;
+  font-weight: 660;
+  font-variant-numeric: tabular-nums;
+}
+
+html[data-theme="light"] .curve-telemetry-pill {
+  color: #0b7a46;
+}
+
+.curve-telemetry-pill.muted {
+  background: var(--glass-recessed);
+  border-color: var(--glass-border-subtle);
+  color: var(--muted);
+  font-weight: 560;
+}
+
+.curve-svg-shell {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 0.6rem 0.65rem 0.35rem;
+  border-radius: 1.12rem;
+  background: var(--glass-card);
+  border: 1px solid var(--glass-border);
+  outline: 1px solid var(--glass-border-subtle);
+  outline-offset: -1px;
+  box-shadow: var(--specular-card);
+}
+
+.curve-svg {
+  width: 100%;
+  max-width: 17.5rem;
+  height: auto;
+  overflow: visible;
+  touch-action: none;
+}
+
+.curve-plot-bg {
+  fill: var(--glass-recessed);
+}
+
+.curve-plot-border {
+  fill: none;
+  stroke: var(--glass-border-subtle);
+  stroke-width: 1.25;
+  pointer-events: none;
+}
+
+.curve-deadzone-fill.inner {
+  fill: rgba(245, 158, 11, 0.13);
+}
+
+.curve-deadzone-fill.outer {
+  fill: rgba(99, 102, 241, 0.12);
+}
+
+html[data-theme="dark"] .curve-deadzone-fill.inner {
+  fill: rgba(251, 191, 36, 0.15);
+}
+
+html[data-theme="dark"] .curve-deadzone-fill.outer {
+  fill: rgba(129, 140, 248, 0.16);
+}
+
+.curve-grid-line {
+  stroke: var(--glass-divider);
+  stroke-width: 1;
+}
+
+.curve-deadzone-line {
+  stroke: var(--warning);
+  stroke-width: 1.2;
+  stroke-dasharray: 4 3;
+  opacity: 0.68;
+}
+
+.curve-linear-ref {
+  stroke: var(--subtle-fg);
+  stroke-width: 1.3;
+  stroke-dasharray: 5 5;
+  opacity: 0.55;
+}
+
+.curve-spline-path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+.curve-live-guide {
+  stroke: var(--emerald);
+  stroke-width: 1.15;
+  stroke-dasharray: 2.5 2.5;
+  opacity: 0.65;
+}
+
+.curve-live-halo {
+  fill: var(--emerald);
+  opacity: 0.22;
+}
+
+.curve-live-dot {
+  fill: var(--emerald);
+  stroke: #ffffff;
+  stroke-width: 2;
+}
+
+.curve-axis-label {
+  fill: var(--subtle-fg);
+  font-size: 9.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.curve-handle {
+  cursor: grab;
+}
+
+.curve-handle.dragging {
+  cursor: grabbing;
+}
+
+.curve-handle-hit {
+  fill: transparent;
+}
+
+.curve-handle-knob {
+  fill: var(--accent);
+  stroke: #ffffff;
+  stroke-width: 2.2;
+  transition: transform 0.12s ease, r 0.12s ease;
+}
+
+.curve-handle:hover .curve-handle-knob,
+.curve-handle.dragging .curve-handle-knob {
+  fill: var(--accent-bright);
+  stroke-width: 2.6;
+}
+
+.curve-handle-shine {
+  fill: rgba(255, 255, 255, 0.72);
+  pointer-events: none;
+}
+
+.curve-handle-tag {
+  fill: var(--text);
+  font-size: 10px;
+  font-weight: 750;
+  pointer-events: none;
+}
+
+.curve-coords-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.48rem;
+}
+
+.curve-coords-grid > label {
+  font-size: 0.71rem;
+  color: var(--muted);
+  min-width: 0;
+}
+
+.curve-coords-grid input[type="number"] {
+  min-height: 2.08rem;
+  font-size: 0.77rem;
+  padding: 0.22rem 0.45rem;
+  margin-top: 0.22rem;
+}
+
+.curve-section {
+  padding-top: 0.88rem;
+  border-top: 1px solid var(--glass-divider);
+  min-width: 0;
+}
+
+.inline-icon {
+  vertical-align: -2px;
+  margin-right: 0.28rem;
+  color: var(--accent);
+}
+
+.preset-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+}
+
+.preset-pills > button {
+  min-height: 2.08rem;
+  padding: 0.26rem 0.74rem;
+  font-size: 0.76rem;
+  border-radius: 999px;
+}
+
+.preset-pills > button.selected {
+  background: linear-gradient(
+    180deg,
+    var(--accent-bright) 0%,
+    var(--accent) 100%
+  );
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.55);
+  box-shadow:
+    inset 0 1px 0.5px rgba(255, 255, 255, 0.6),
+    0 5px 14px -4px var(--accent-glow);
+}
+
+.curve-range-row {
+  display: block;
+  margin-top: 0.65rem;
+}
+
+.curve-range-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.35rem;
+  margin-bottom: 0.2rem;
+}
+
+.curve-range-meta output {
+  font-weight: 680;
+  font-size: 0.79rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+
+.curve-range-meta output small {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 0.71rem;
+}
+
+.axis-switch-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.axis-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.58rem 0.8rem;
+  border-radius: 0.92rem;
+  background: var(--glass-card);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--specular-control);
+}
+
+.axis-switch-row strong {
+  display: block;
+  font-size: 0.81rem;
+  font-weight: 660;
+  color: var(--text);
+}
+
+.axis-switch-row small {
+  display: block;
+  color: var(--muted);
+  font-size: 0.72rem;
+  margin-top: 0.08rem;
+}
+
+.sync-swap-btn {
+  display: inline-block;
+  margin-top: 0.24rem;
+  font-size: 0.72rem;
+}
+
+.curve-card-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--glass-divider);
+}
+
+.curve-card-foot > button:first-child {
+  font-size: 0.78rem;
+  min-height: 2.24rem;
+  padding: 0.36rem 0.88rem;
+}
+
+/* ==========================================================================
    Responsive Scaling, Container Queries & System Accessibility Fallbacks
    ========================================================================== */
 
@@ -2981,6 +3348,7 @@ html[data-theme="light"] .sync-tag.ok {
 
 @media (max-width: 940px) {
   .rear-layout,
+  .curves-grid,
   .settings-layout,
   .tools-layout,
   .keymap-layout {
@@ -3022,10 +3390,14 @@ html[data-theme="light"] .sync-tag.ok {
 
 @container (max-width: 54rem) {
   .rear-layout,
+  .curves-grid,
   .settings-layout,
   .tools-layout,
   .keymap-layout {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .curve-coords-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .selection {
     max-width: 100%;

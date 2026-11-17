@@ -15,6 +15,7 @@ import {
 import {
   Gamepad2,
   Keyboard,
+  Crosshair,
   SlidersHorizontal,
   Activity,
   FolderArchive,
@@ -38,6 +39,7 @@ import {
   ScanLine,
   FileSpreadsheet,
 } from "lucide-react";
+import CurvesPage from "./CurvesPage";
 import KeymapPage from "./KeymapPage";
 import {
   type View,
@@ -691,7 +693,13 @@ export default function App() {
             const affected = [
               ...Object.keys(d.changes || {}).map((i) => "macro_" + i),
               ...(d.settings || []).map((s: any) =>
-                s.feature === "motor_channel" ? "motors" : s.feature,
+                s.feature === "motor_channel"
+                  ? "motors"
+                  : s.feature === "stick_curve"
+                    ? "sticks"
+                    : s.feature === "trigger_curve"
+                      ? "triggers"
+                      : s.feature,
               ),
             ];
             const changed = affected.some(
@@ -720,7 +728,9 @@ export default function App() {
                   : "导入的记录"}
             </li>
           ))}
-          {settings.length > 0 && <li>板载设置：{settings.length} 项</li>}
+          {settings.map((s, idx) => (
+            <li key={`setting-${idx}`}>{describeStagedSetting(s)}</li>
+          ))}
         </ul>
       </>
     );
@@ -793,11 +803,25 @@ export default function App() {
                 ? v.zone === s.zone
                 : s.feature === "motor_channel"
                   ? v.channel === s.channel
-                  : true)
+                  : s.feature === "stick_curve" || s.feature === "trigger_curve"
+                    ? v.side === s.side
+                    : true)
           ),
       ),
       s,
     ]);
+  };
+
+  const unstageSetting = (feature: string, side?: number) => {
+    setSettings((old) =>
+      old.filter(
+        (v) =>
+          !(
+            v.feature === feature &&
+            (side === undefined || v.side === side)
+          ),
+      ),
+    );
   };
 
   const identify = async () => {
@@ -851,6 +875,10 @@ export default function App() {
     keymap: [
       "键盘宏映射",
       "将背键暗号或任意手柄组合键映射为电脑键盘、鼠标与多步顺序宏。",
+    ],
+    curves: [
+      "摇杆与扳机",
+      "调节板载左右摇杆内外死区、响应曲线、轴向反转与扳机行程档位。",
     ],
     settings: ["手柄设置", "按设备能力动态调整振动强度、标准按键与 RGB 灯区。"],
     input: ["实时输入", "检查电脑收到的 XInput 游戏输入与摇杆状态。"],
@@ -919,6 +947,7 @@ export default function App() {
           {[
             ["rear", "背键工作区", Gamepad2],
             ["keymap", "键盘宏映射", Keyboard],
+            ["curves", "摇杆与扳机", Crosshair],
             ["settings", "手柄设置", SlidersHorizontal],
             ["input", "实时输入", Activity],
             ["tools", "配置与工具", FolderArchive],
@@ -975,7 +1004,7 @@ export default function App() {
             </select>
           </label>
           <small className="version">
-            O+ Studio 0.6.0 · {isTauri ? "Rust" : "Web Driver"}
+            O+ Studio 0.7.0 · {isTauri ? "Rust" : "Web Driver"}
           </small>
         </div>
       </aside>
@@ -1142,7 +1171,9 @@ export default function App() {
                 查找或切换蓝牙手柄 <ArrowRight size={16} />
               </button>
             </section>
-          ) : view && isReadOnly && (page === "rear" || page === "settings") ? (
+          ) : view &&
+            isReadOnly &&
+            (page === "rear" || page === "curves" || page === "settings") ? (
             <section className="panel readonly-panel">
               <div className="section-heading">
                 <h2>只读兼容诊断模式</h2>
@@ -1408,6 +1439,16 @@ export default function App() {
                 </section>
               </div>
             )
+          ) : page === "curves" && view ? (
+            <CurvesPage
+              view={view}
+              settings={settings}
+              pad={pad}
+              busy={busy}
+              onStage={stageSetting}
+              onUnstage={unstageSetting}
+              onNotice={setNotice}
+            />
           ) : page === "settings" && view ? (
             <Settings
               view={view}
@@ -1644,7 +1685,7 @@ export default function App() {
 
               {view && (
                 <details className="panel">
-                  <summary>设备描述符与只读数据</summary>
+                  <summary>设备描述符与板载原始记录</summary>
                   <dl>
                     <dt>设备地址</dt>
                     <dd>{view.snapshot.address}</dd>
@@ -1669,7 +1710,9 @@ export default function App() {
                       {view.snapshot.decoded.macro_keys?.join(", ") || "无"}
                     </dd>
                   </dl>
-                  <p>摇杆 / 扳机曲线保留为只读记录。</p>
+                  <p>
+                    能力位掩码与摇杆 / 扳机板载原始字节（可在“摇杆与扳机”工作区可视化调节与保存）：
+                  </p>
                   <pre>
                     {JSON.stringify(
                       {
@@ -2028,6 +2071,28 @@ export default function App() {
 }
 
 const MOTOR_LABELS = ["左握把", "右握把", "左扳机", "右扳机"];
+
+function describeStagedSetting(s: any): string {
+  if (s.feature === "stick_curve") {
+    return `${s.side === 0 ? "左摇杆" : "右摇杆"}曲线与死区`;
+  }
+  if (s.feature === "trigger_curve") {
+    return `${s.side === 0 ? "左扳机" : "右扳机"}曲线与死区`;
+  }
+  if (s.feature === "motor_channel") {
+    return `振动强度（${MOTOR_LABELS[s.channel] || `通道 ${s.channel + 1}`}：${s.level}%）`;
+  }
+  if (s.feature === "motors") {
+    return "振动强度（四通道）";
+  }
+  if (s.feature === "remapping") {
+    return `标准按键映射（${name(s.source)} → ${name(s.target || s.source)}）`;
+  }
+  if (s.feature === "lighting") {
+    return `灯光颜色（区域 ${Number(s.zone) + 1}：${String(s.rgb).toUpperCase()}）`;
+  }
+  return "板载设置更改";
+}
 
 function Settings({
   view,

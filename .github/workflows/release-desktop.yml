@@ -38,7 +38,7 @@ jobs:
       - name: Package OPlusStudio-Windows-x64.zip
         shell: pwsh
         run: |
-          $stage = "releases/0.6.0/OPlusStudio"
+          $stage = "releases/0.7.0/OPlusStudio"
           $zipPath = "OPlusStudio-Windows-x64.zip"
           if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
           Compress-Archive -Path `

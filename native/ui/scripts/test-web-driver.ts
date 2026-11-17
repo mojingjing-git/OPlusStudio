@@ -3,6 +3,15 @@ import fs from "node:fs";
 import { describe, it } from "node:test";
 
 import { inferDesktopReleaseUrl } from "../src/backend.ts";
+import {
+  CURVE_PRESETS,
+  TRIGGER_GEARS,
+  curveShape,
+  curveSideMask,
+  evaluateCurveY,
+  matchCurvePreset,
+  matchTriggerGear,
+} from "../src/curves.ts";
 import type { Change, Input, Snapshot } from "../src/types.ts";
 import {
   NOTIFY,
@@ -837,7 +846,7 @@ describe("4. Keymap Validation, 0.4.0 Migration, W3C Gamepad & Simulated WebBLE 
     };
 
     const recordStore: Record<string, number[]> = {
-      name: Array.from(new TextEncoder().encode("致动O+_CB4EC9")),
+      name: Array.from(new TextEncoder().encode("致动O+_123456")),
       caps: fromHex(snap.capabilities.hex) as unknown as number[],
       all_keys: Array.from(fromHex(snap.raw.all_keys!.hex)),
       remap_keys: Array.from(fromHex(snap.raw.remap_keys!.hex)),
@@ -905,12 +914,21 @@ describe("4. Keymap Validation, 0.4.0 Migration, W3C Gamepad & Simulated WebBLE 
             } else if (plain.opcode === 0xb5) {
               const [page, slot] = plain.payload;
               pagedReply(plain.serial, page, recordStore[`macro_${slot}`]);
-            } else if (plain.opcode === 0x35 || plain.opcode === 0x37) {
+            } else if (
+              plain.opcode === 0x31 ||
+              plain.opcode === 0x32 ||
+              plain.opcode === 0x35 ||
+              plain.opcode === 0x37
+            ) {
               const chunkIdx = (plain.serial >>> 3) & 15;
               const key =
                 plain.opcode === 0x35
                   ? `macro_${(lengthField >>> 5) & 7}`
-                  : "lighting";
+                  : plain.opcode === 0x31
+                    ? "sticks"
+                    : plain.opcode === 0x32
+                      ? "triggers"
+                      : "lighting";
               if (chunkIdx === 0) writeAssembler[key] = [];
               writeAssembler[key].push(...plain.payload);
               const expectedTotal = writeAssembler[key][0] + 1;
@@ -951,8 +969,8 @@ describe("4. Keymap Validation, 0.4.0 Migration, W3C Gamepad & Simulated WebBLE 
     };
 
     const fakeBtDevice: WebBluetoothDevice = Object.assign(new EventTarget(), {
-      id: "CB4EC9ABCDEF",
-      name: "致动O+_CB4EC9",
+      id: "123456ABCDEF",
+      name: "致动O+_123456",
       gatt: gattServer,
     });
 
@@ -963,7 +981,7 @@ describe("4. Keymap Validation, 0.4.0 Migration, W3C Gamepad & Simulated WebBLE 
     try {
       const readSnap = await session.snapshot();
       assert.equal(supportTier(readSnap), "verified");
-      assert.equal(readSnap.decoded.device_name, "致动O+_CB4EC9");
+      assert.equal(readSnap.decoded.device_name, "致动O+_123456");
 
       // Execute multi-chunk lighting write + macro_0 write with readback verification!
       const store = createMemoryStorage();
@@ -995,8 +1013,270 @@ describe("4. Keymap Validation, 0.4.0 Migration, W3C Gamepad & Simulated WebBLE 
       assert.ok(
         bytesEqual(snapshotRecord(receipt.snapshot, "macro_0"), macroTarget),
       );
+
+      // Verify WebBLE 0x31 (WRITE_STICK) & 0x32 (WRITE_TRIGGER) single-packet 15-byte payload + undo roundtrip!
+      const stickTarget = desiredSetting(receipt.snapshot, "sticks", {
+        side: 0,
+        inner: 8,
+        outer_raw: 8,
+        point1: [35, 35],
+        point2: [136, 204],
+        invert_x: false,
+        invert_y: true,
+        swap: false,
+      });
+      const triggerTarget = desiredSetting(receipt.snapshot, "triggers", {
+        side: 1,
+        inner: 4,
+        outer_raw: 34,
+        point1: [142, 142],
+        point2: [220, 157],
+      });
+      const curveReceipt = await execute(session, store, "save", [
+        {
+          key: "sticks",
+          expected: snapshotRecord(receipt.snapshot, "sticks"),
+          target: stickTarget,
+        },
+        {
+          key: "triggers",
+          expected: snapshotRecord(receipt.snapshot, "triggers"),
+          target: triggerTarget,
+        },
+      ]);
+      assert.equal(curveReceipt.journal.state, "completed");
+      assert.ok(
+        bytesEqual(snapshotRecord(curveReceipt.snapshot, "sticks"), stickTarget),
+      );
+      assert.ok(
+        bytesEqual(
+          snapshotRecord(curveReceipt.snapshot, "triggers"),
+          triggerTarget,
+        ),
+      );
+
+      const curveUndo = await execute(
+        session,
+        store,
+        "undo",
+        undoEdits(curveReceipt.journal),
+      );
+      assert.equal(curveUndo.journal.state, "completed");
+      assert.ok(
+        bytesEqual(
+          snapshotRecord(curveUndo.snapshot, "sticks"),
+          snapshotRecord(readSnap, "sticks"),
+        ),
+      );
+      assert.ok(
+        bytesEqual(
+          snapshotRecord(curveUndo.snapshot, "triggers"),
+          snapshotRecord(readSnap, "triggers"),
+        ),
+      );
     } finally {
       await session.close();
+    }
+  });
+});
+
+describe("5. v0.7.0 Stick & Trigger Curves, Capability Side Gate & Fritsch-Carlson Spline", () => {
+  it("preserves opposite channel 7 bytes and high flags (0xF8 / trigger flags), and rejects invalid curves or disabled sides", async () => {
+    const s = cloneSnapshotFixture();
+    s.raw.sticks = makeRecord([
+      6, 8, 85, 85, 170, 170, 0xa8, // Left stick with unknown high bits 0xA8
+      9, 12, 35, 35, 136, 204, 0x50, // Right stick
+    ]);
+    s.raw.triggers = makeRecord([
+      4, 2, 85, 85, 170, 170, 0x5a, // Left trigger with flags 0x5A
+      20, 40, 142, 142, 220, 157, 0x33, // Right trigger
+    ]);
+    const origSticks = snapshotRecord(s, "sticks");
+    const origTriggers = snapshotRecord(s, "triggers");
+
+    // 1. Single-side stick edit preserves Right 7 bytes & Left 0xA8 high flag bits
+    const nextSticks = desiredSetting(s, "sticks", {
+      side: 0,
+      inner: 10,
+      outer_raw: 15,
+      point1: [35, 35],
+      point2: [136, 204],
+      invert_x: true,
+      invert_y: false,
+      swap: true,
+    });
+    assert.deepEqual(nextSticks.slice(1, 8), [
+      10,
+      15,
+      35,
+      35,
+      136,
+      204,
+      0xa8 | 0x01 | 0x04,
+    ]);
+    assert.deepEqual(nextSticks.slice(8, 15), origSticks.slice(8, 15));
+    assert.doesNotThrow(() => boundary(s, "sticks", origSticks, nextSticks));
+
+    // 2. Single-side trigger edit preserves Left 7 bytes & Right 0x33 flags byte
+    const nextTriggers = desiredSetting(s, "triggers", {
+      side: 1,
+      inner: 30,
+      outer_raw: 60,
+      point1: [67, 67],
+      point2: [72, 106],
+    });
+    assert.deepEqual(nextTriggers.slice(1, 8), origTriggers.slice(1, 8));
+    assert.deepEqual(nextTriggers.slice(8, 15), [30, 60, 67, 67, 72, 106, 0x33]);
+    assert.doesNotThrow(() =>
+      boundary(s, "triggers", origTriggers, nextTriggers),
+    );
+
+    // 3. Reject inner + outer_raw >= max_progress and p1_x > p2_x
+    for (const badStick of [
+      {
+        side: 0,
+        inner: 60,
+        outer_raw: 40,
+        point1: [85, 85],
+        point2: [170, 170],
+        invert_x: false,
+        invert_y: false,
+        swap: false,
+      },
+      {
+        side: 0,
+        inner: 92,
+        outer_raw: 8,
+        point1: [85, 85],
+        point2: [170, 170],
+        invert_x: false,
+        invert_y: false,
+        swap: false,
+      },
+      {
+        side: 0,
+        inner: 6,
+        outer_raw: 8,
+        point1: [171, 85],
+        point2: [170, 170],
+        invert_x: false,
+        invert_y: false,
+        swap: false,
+      },
+    ]) {
+      assert.throws(() => desiredSetting(s, "sticks", badStick));
+    }
+
+    for (const badTrig of [
+      { side: 0, inner: 140, outer_raw: 60, point1: [85, 85], point2: [170, 170] },
+      { side: 1, inner: 200, outer_raw: 0, point1: [85, 85], point2: [170, 170] },
+      { side: 1, inner: 4, outer_raw: 34, point1: [120, 100], point2: [119, 200] },
+    ]) {
+      assert.throws(() => desiredSetting(s, "triggers", badTrig));
+    }
+
+    // 4. boundary() rejects tampered high flags on sticks (0xF8) and ANY flags change on triggers
+    const tamperedStickFlags = [...nextSticks];
+    tamperedStickFlags[7] ^= 0x08;
+    assert.throws(() =>
+      boundary(s, "sticks", origSticks, tamperedStickFlags),
+    );
+
+    const tamperedTrigFlags = [...nextTriggers];
+    tamperedTrigFlags[14] ^= 0x01;
+    assert.throws(() =>
+      boundary(s, "triggers", origTriggers, tamperedTrigFlags),
+    );
+
+    // 5. Capability single-side gate: bit 1 (0x02) = Left, bit 0 (0x01) = Right!
+    assert.equal(curveSideMask(0), 0x02);
+    assert.equal(curveSideMask(1), 0x01);
+
+    const sLeftOnly = structuredClone(s);
+    sLeftOnly.identity.version_display = "1.46";
+    sLeftOnly.capabilities = makeRecord([0x02, 0x02, 15, 0, 63, 1, 11, 0, 192, 0]);
+    assert.doesNotThrow(() =>
+      desiredSetting(sLeftOnly, "sticks", {
+        side: 0,
+        inner: 12,
+        outer_raw: 8,
+        point1: [85, 85],
+        point2: [170, 170],
+        invert_x: false,
+        invert_y: false,
+        swap: false,
+      }),
+    );
+    assert.throws(() =>
+      desiredSetting(sLeftOnly, "sticks", {
+        side: 1,
+        inner: 12,
+        outer_raw: 8,
+        point1: [85, 85],
+        point2: [170, 170],
+        invert_x: false,
+        invert_y: false,
+        swap: false,
+      }),
+    );
+    assert.doesNotThrow(() =>
+      desiredSetting(sLeftOnly, "triggers", {
+        side: 0,
+        inner: 4,
+        outer_raw: 34,
+        point1: [85, 85],
+        point2: [170, 170],
+      }),
+    );
+    assert.throws(() =>
+      desiredSetting(sLeftOnly, "triggers", {
+        side: 1,
+        inner: 4,
+        outer_raw: 34,
+        point1: [85, 85],
+        point2: [170, 170],
+      }),
+    );
+    assert.throws(() =>
+      boundary(sLeftOnly, "triggers", origTriggers, nextTriggers),
+    );
+  });
+
+  it("matches KeyLinker Fritsch-Carlson monotone cubic spline, 5 curve presets, and 4 trigger gears", () => {
+    assert.equal(CURVE_PRESETS.length, 5);
+    assert.equal(TRIGGER_GEARS.length, 4);
+    assert.equal(matchCurvePreset([85, 85], [170, 170]), "default");
+    assert.equal(matchCurvePreset([67, 67], [72, 106]), "fine");
+    assert.equal(matchCurvePreset([50, 80], [170, 170]), null);
+    assert.equal(matchTriggerGear(0, 0), "zero");
+    assert.equal(matchTriggerGear(4, 34), "small");
+    assert.equal(matchTriggerGear(20, 40), "medium");
+    assert.equal(matchTriggerGear(30, 60), "large");
+    assert.equal(matchTriggerGear(4, 2), null);
+
+    // Linear preset sits strictly on y == x
+    for (const [x, y] of curveShape([85, 85], [170, 170], 33)) {
+      assert.ok(Math.abs(x - y) < 1e-6);
+    }
+
+    // Monotone presets pass through exact knots without out-of-range overshoot
+    for (const preset of CURVE_PRESETS) {
+      assert.ok(
+        Math.abs(
+          evaluateCurveY(preset.point1, preset.point2, preset.point1[0]) -
+            preset.point1[1],
+        ) < 1e-6,
+      );
+      assert.ok(
+        Math.abs(
+          evaluateCurveY(preset.point1, preset.point2, preset.point2[0]) -
+            preset.point2[1],
+        ) < 1e-6,
+      );
+      const pts = curveShape(preset.point1, preset.point2, 65);
+      for (const [, y] of pts) {
+        assert.ok(y >= 0 && y <= 255);
+      }
     }
   });
 });

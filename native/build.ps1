@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $nativeManifest = Join-Path $PSScriptRoot 'Cargo.toml'
 $target = Join-Path $projectRoot 'build/rust-target'
-$release = Join-Path $projectRoot 'releases/0.6.0/OPlusStudio'
+$release = Join-Path $projectRoot 'releases/0.7.0/OPlusStudio'
 Push-Location $projectRoot
 try {
     & npm.cmd --prefix native/ui ci --no-audit --no-fund

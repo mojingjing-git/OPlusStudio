@@ -1,4 +1,4 @@
-# O+ Studio 0.6.0
+# O+ Studio 0.7.0
 
 > 🌐 **在线零安装网页驱动（Edge / Chrome 直连蓝牙）**：**[https://mojingjing-git.github.io/OPlusStudio/](https://mojingjing-git.github.io/OPlusStudio/)**  
 > 💻 **Windows 免安装原生桌面版（支持电脑后台键盘宏）**：**[前往 GitHub Releases 下载最新版](https://github.com/mojingjing-git/OPlusStudio/releases/latest)**
@@ -8,16 +8,16 @@
 ## 两种使用方式
 
 ### 1. Windows 原生桌面版（全功能：蓝牙板载配置 + 电脑后台键鼠宏）
-双击根目录 `Start-OPlus.cmd`，或直接运行 `releases/0.6.0/OPlusStudio/OPlusStudio.Native.exe`。
-- **蓝牙通道**：读取能力描述符、编辑板载背键、振动、标准改键、RGB 灯区与导出诊断包。
-- **USB / 2.4G（XInput）通道**：实时输入检测与**电脑端原生键盘/鼠标宏映射**（无需连接蓝牙即可直接使用，支持 `F8` 全局急停）。
+双击根目录 `Start-OPlus.cmd`，或直接运行 `releases/0.7.0/OPlusStudio/OPlusStudio.Native.exe`。
+- **蓝牙通道**：读取能力描述符、编辑板载背键、**左右摇杆内外死区 / 响应曲线 / X·Y 轴反向 / 左右互换**、**左右扳机起始与末端死区 / 四档行程预设 / 响应曲线**、振动强度、标准改键、RGB 灯区与导出诊断包。
+- **USB / 2.4G（XInput）通道**：实时输入检测（含曲线画布实时翠绿投影光点）与**电脑端原生键盘/鼠标宏映射**（无需连接蓝牙即可直接使用，支持 `F8` 全局急停）。
 
-旧版 `releases/0.5.0` 与经典版 `releases/0.4.0`（`Start-OPlus-Classic.cmd`）完整保留。连接设备或开启键盘宏前请先关闭其他版本实例。
+历史版本 `releases/0.6.0`、`releases/0.5.0` 与经典版 `releases/0.4.0`（`Start-OPlus-Classic.cmd`）完整保留。连接设备或开启键盘宏前请先关闭其他版本实例。
 
 ### 2. 零安装在线网页驱动（GitHub Pages / Edge & Chrome）
 无需安装任何客户端或服务器，在桌面版 **Microsoft Edge / Google Chrome** 中直接打开网页版即可：
-- 通过 **Web Bluetooth** 直连致动 O+（自动适配 `"致动O+_..."` 广播名）完成板载背键、顺序宏、振动、标准改键、RGB 灯区读写与 **背键三键暗号一键烧录**；
-- 通过 **W3C Gamepad API** 实时检测手柄摇杆/扳机输入并运行实体背键引导识别；
+- 通过 **Web Bluetooth** 直连致动 O+（自动适配 `"致动O+_..."` 广播名）完成板载背键、顺序宏、**高级摇杆与扳机死区/曲线/行程档位（`0x31` / `0x32`）**、振动、标准改键、RGB 灯区读写与 **背键三键暗号一键烧录**；
+- 通过 **W3C Gamepad API** 实时检测手柄摇杆/扳机输入（在曲线画布实时渲染硬件投影光点）并运行实体背键引导识别；
 - 通过 **IndexedDB + SHA-256** 在浏览器本地执行完整的冲突检测、备份校验、回读核对、失败逆序回滚与崩溃恢复中心；
 - 在线编排好的电脑键鼠宏方案可一键导出 `.json`，无缝导入免安装 Windows 桌面版运行游戏后台宏。
 
@@ -29,7 +29,7 @@
 # 1. 初始化并推送到你的 GitHub 仓库
 git init -b main
 git add .
-git commit -m "feat: O+ Studio 0.6.0 desktop & web driver"
+git commit -m "feat: O+ Studio 0.7.0 desktop & web driver"
 git remote add origin https://github.com/<用户名>/<仓库名>.git
 git push -u origin main
 
@@ -37,28 +37,30 @@ git push -u origin main
 #    即可自动部署在线网页驱动：https://<用户名>.github.io/<仓库名>/
 
 # 3. （可选）推送版本标签，自动构建并发布 OPlusStudio-Windows-x64.zip 到 GitHub Releases
-git tag v0.6.0
-git push origin v0.6.0
+git tag v0.7.0
+git push origin v0.7.0
 ```
 
 详细步骤请参阅 **[网页驱动与 GitHub Pages 部署指南](docs/web-driver-guide.md)**。
 
-## 0.6.0 核心功能
+## 0.7.0 核心功能
 
-### 1. 致动 O+ 全系动态通用化与三级兼容分级
+### 1. 板载高级摇杆与扳机工作台（`0x31 WRITE_STICK` / `0x32 WRITE_TRIGGER`）
+- **交互式液态玻璃响应曲线画布**：基于 Fritsch-Carlson 单调三次样条插值（平滑通过 `(0,0)`、`P1`、`P2`、`(255,255)` 且零震荡过冲），支持鼠标/触控拖拽双高光控制点 `P1`、`P2` 与精确数值微调；USB / 2.4G 在线时实时投射翠绿硬件输入光点。
+- **官方预设与扳机四档行程**：内置 `线性默认`、`快速灵敏`、`缓和延迟`、`平滑渐进`、`精细微调` 五大曲线预设，以及扳机专属 `零死区全行程`（`0–200`）、`微死区灵巧`（`4–166`）、`中行程均衡`（`20–160`）、`短触发速射`（`30–140`）四档快捷行程。
+- **精细通道保护与标志位守卫**：严格按 `0xB0` 能力位（`bit 1` 左侧、`bit 0` 右侧）开放通道；支持单侧独立暂存与一键镜像到对侧，未触碰通道、摇杆高位未知标志（`0xF8`）及扳机全部标志字节 `100%` 原样保留。
+
+### 2. 致动 O+ 全系动态通用化与三级兼容分级
 - **已实测型号（`Verified`）**：致动 O+（VID `1005` / PID `2001`，固件 `1.37`，mode 6 / gen 2）自动启用验证预设。
-- **动态兼容（`Compatible`）**：对 KeyLinker 第二代协议（`effective_generation == 2`）的不同固件与批次，基于 `0xB0` 动态能力描述符按需适配 `1–8` 个背键槽、动态宏按键位掩码（含未知扩展键 `KEY_{code}` 无损往返）、每槽独立步数上限（`D8.bit1` `kind 6`，最高 47 步）、独立改键可选目标表（`D6.bit1` `kind 7`）、按通道无损更新的振动强度以及动态 RGB 灯区。
+- **动态兼容（`Compatible`）**：对 KeyLinker 第二代协议（`effective_generation == 2`）的不同固件与批次，基于 `0xB0` 动态能力描述符按需适配 `1–8` 个背键槽、动态宏按键位掩码（含未知扩展键 `KEY_{code}` 无损往返）、每槽独立步数上限（`D8.bit1` `kind 6`，最高 47 步）、独立改键可选目标表（`D6.bit1` `kind 7`）、摇杆/扳机曲线、振动强度及动态 RGB 灯区。
 - **只读诊断模式（`ReadOnly`）**：第一代协议或未知异常描述符设备不断连，支持查看身份信息并一键导出 `oplus-diagnostic-v1` 兼容诊断包，严格拦截任何盲写。
-- **跨固件配置分享与事务安全**：支持跨不同 `macro_keys` 布局的背键配置在掩码层无损重编码导入（完整保留 `Hold` 与多步宏）；桌面端与网页端共享逐位等价的冲突检查、快照备份、逐项回读核对、失败逆序回滚与崩溃恢复中心保护。
 
-### 2. 电脑端原生键盘/鼠标宏映射引擎
-- **零依赖低延迟后台线程**：基于 Windows 高精度等待定时器（`CreateWaitableTimerExW` `2 ms` 节拍，空闲时 `Condvar` 0% CPU 挂起）与标准用户态 `SendInput`（填充虚拟键码 + `MapVirtualKeyW` 硬件扫描码 + 扩展键标志）。
-- **背键 → 电脑键盘宏一键暗号桥接**：内置 8 槽低冲突三键板载暗号预设（如 `M1 = Back + LS + RS`），支持自定义暗号并一键同步到背键草稿写入手柄（桌面端与网页端均可直接烧录）。
-- **无串扰组合键匹配与语义引用计数**：已激活组合键在按住期间独占其组成按钮（按住 `M1` 叠加正面方向键绝不误触 `M2`），支持 `20 ms` 真子集防抖与 `<20 ms` 快速轻点补发；多规则共用 `Ctrl/Shift/Alt/Win` 引用计数不提前释放，释放时先普通键后修饰键。
-- **多步顺序宏与物理键盘录入**：支持单次执行、按住循环（松手立停）、按下切换循环，支持纯滚轮脉冲步与纯等待步；页面内基于物理键位码（`KeyboardEvent.code`）录入按键，兼容中文输入法；支持导入旧版 `0.4.0` `profile.json`。
-- **全方位防卡键与合规边界**：全局保留 `F8` 紧急停止；BLE 读写、录入弹窗、手柄断连与关闭窗口时自动暂停并全量释放按键；遇到管理员窗口（UIPI）或反作弊拦截时立即优雅放弃注入并提示，绝不做任何驱动或进程注入绕过。
+### 3. 电脑端原生键盘/鼠标宏映射引擎
+- **零依赖低延迟后台线程**：基于 Windows 高精度等待定时器（`CreateWaitableTimerExW` `2 ms` 节拍，空闲时 `Condvar` 0% CPU 挂起）与标准用户态 `SendInput`。
+- **背键 → 电脑键盘宏一键暗号桥接**：内置 8 槽低冲突三键板载暗号预设（如 `M1 = Back + LS + RS`），桌面端与网页端均可一键同步并烧录至手柄。
+- **无串扰组合键匹配、物理键盘录入与 `F8` 全局急停**：支持单次执行、按住循环、按下切换循环、纯滚轮脉冲步与旧版 `0.4.0` `profile.json` 导入；遇到 UIPI 或反作弊拦截时优雅放弃注入并提示。
 
-[网页驱动部署指南](docs/web-driver-guide.md) · [使用指南](docs/native-user-guide.md) · [0.6.0 验证记录](docs/v0.6-validation.md) · [0.6.0 实施计划](docs/v0.6-plan.md) · [0.6.0 独立复审](docs/v0.6-plan-review.md) · [0.5.0 验证记录](docs/native-validation.md) · [旧版说明](README-0.4.md)
+[0.7.0 验证记录](docs/v0.7-validation.md) · [网页驱动部署指南](docs/web-driver-guide.md) · [使用指南](docs/native-user-guide.md) · [0.6.0 验证记录](docs/v0.6-validation.md) · [0.5.0 验证记录](docs/native-validation.md) · [旧版说明](README-0.4.md)
 
 ## 源码构建与自动化测试
 

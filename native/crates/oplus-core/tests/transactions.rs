@@ -538,3 +538,235 @@ async fn readonly_degradation_blocks_writes_and_exports_diagnostics() {
     assert!(prepare(&mut m, dir.path(), "save", e).await.is_err());
     assert!(m.writes.is_empty());
 }
+
+#[test]
+fn sticks_and_triggers_single_side_invariance_flags_and_bounds() {
+    let mut s = fixture();
+    // Inject non-zero unknown high flag bits (0xA8 on sticks, 0x5A on triggers) to verify preservation
+    s.raw.insert(
+        "sticks".into(),
+        Record::new(&[
+            6, 8, 85, 85, 170, 170, 0xa8, // Left stick (has unknown 0xA8)
+            9, 12, 35, 35, 136, 204, 0x50, // Right stick
+        ]),
+    );
+    s.raw.insert(
+        "triggers".into(),
+        Record::new(&[
+            4, 2, 85, 85, 170, 170, 0x5a, // Left trigger (unknown flags 0x5A)
+            20, 40, 142, 142, 220, 157, 0x33, // Right trigger
+        ]),
+    );
+    let orig_sticks = s.record("sticks").unwrap();
+    let orig_triggers = s.record("triggers").unwrap();
+
+    // 1. Single-side stick update (Left = side 0): Right 7 bytes [8..15] + Left high 5 flag bits (0xA8) 100% preserved!
+    let next_sticks = desired_setting(
+        &s,
+        "sticks",
+        &serde_json::json!({
+            "side": 0,
+            "inner": 10,
+            "outer_raw": 15,
+            "point1": [35, 35],
+            "point2": [136, 204],
+            "invert_x": true,
+            "invert_y": false,
+            "swap": true,
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        &next_sticks[1..8],
+        &[10, 15, 35, 35, 136, 204, 0xa8 | 0x01 | 0x04]
+    );
+    assert_eq!(&next_sticks[8..15], &orig_sticks[8..15]);
+    assert!(boundary(&s, "sticks", &orig_sticks, &next_sticks).is_ok());
+
+    // 2. Single-side trigger update (Right = side 1): Left 7 bytes [1..8] + Right flags (0x33) 100% preserved!
+    let next_triggers = desired_setting(
+        &s,
+        "triggers",
+        &serde_json::json!({
+            "side": 1,
+            "inner": 30,
+            "outer_raw": 60,
+            "point1": [67, 67],
+            "point2": [72, 106],
+        }),
+    )
+    .unwrap();
+    assert_eq!(&next_triggers[1..8], &orig_triggers[1..8]);
+    assert_eq!(&next_triggers[8..15], &[30, 60, 67, 67, 72, 106, 0x33]);
+    assert!(boundary(&s, "triggers", &orig_triggers, &next_triggers).is_ok());
+
+    // 3. Reject invalid deadzone sum (inner + outer_raw >= max_progress) and crossed points (p1_x > p2_x)
+    for bad_stick in [
+        serde_json::json!({"side": 0, "inner": 60, "outer_raw": 40, "point1": [85, 85], "point2": [170, 170], "invert_x": false, "invert_y": false, "swap": false}),
+        serde_json::json!({"side": 0, "inner": 92, "outer_raw": 8, "point1": [85, 85], "point2": [170, 170], "invert_x": false, "invert_y": false, "swap": false}),
+        serde_json::json!({"side": 0, "inner": 6, "outer_raw": 8, "point1": [171, 85], "point2": [170, 170], "invert_x": false, "invert_y": false, "swap": false}),
+    ] {
+        assert!(desired_setting(&s, "sticks", &bad_stick).is_err());
+    }
+    for bad_trig in [
+        serde_json::json!({"side": 0, "inner": 140, "outer_raw": 60, "point1": [85, 85], "point2": [170, 170]}),
+        serde_json::json!({"side": 1, "inner": 200, "outer_raw": 0, "point1": [85, 85], "point2": [170, 170]}),
+        serde_json::json!({"side": 1, "inner": 4, "outer_raw": 34, "point1": [120, 100], "point2": [119, 200]}),
+    ] {
+        assert!(desired_setting(&s, "triggers", &bad_trig).is_err());
+    }
+
+    // 4. boundary() strictly blocks tampered high flags (0xF8) on sticks and ANY flags change on triggers
+    let mut bad_stick_flags = next_sticks.clone();
+    bad_stick_flags[7] ^= 0x08;
+    assert!(boundary(&s, "sticks", &orig_sticks, &bad_stick_flags).is_err());
+
+    let mut bad_trig_flags = next_triggers.clone();
+    bad_trig_flags[14] ^= 0x01;
+    assert!(boundary(&s, "triggers", &orig_triggers, &bad_trig_flags).is_err());
+
+    // 5. Capability single-side gate: 0x02 means ONLY Left (bit 1) is enabled, Right (bit 0) is disabled!
+    let mut s_left_only = s.clone();
+    s_left_only.identity.version_display = "1.46".into();
+    s_left_only.capabilities = Record::new(&[0x02, 0x02, 15, 0, 63, 1, 11, 0, 192, 0]);
+    assert!(
+        desired_setting(
+            &s_left_only,
+            "sticks",
+            &serde_json::json!({
+                "side": 0,
+                "inner": 12,
+                "outer_raw": 8,
+                "point1": [85, 85],
+                "point2": [170, 170],
+                "invert_x": false,
+                "invert_y": false,
+                "swap": false,
+            })
+        )
+        .is_ok()
+    );
+    assert!(
+        desired_setting(
+            &s_left_only,
+            "sticks",
+            &serde_json::json!({
+                "side": 1,
+                "inner": 12,
+                "outer_raw": 8,
+                "point1": [85, 85],
+                "point2": [170, 170],
+                "invert_x": false,
+                "invert_y": false,
+                "swap": false,
+            })
+        )
+        .is_err()
+    );
+    assert!(
+        desired_setting(
+            &s_left_only,
+            "triggers",
+            &serde_json::json!({
+                "side": 0,
+                "inner": 4,
+                "outer_raw": 34,
+                "point1": [85, 85],
+                "point2": [170, 170],
+            })
+        )
+        .is_ok()
+    );
+    assert!(
+        desired_setting(
+            &s_left_only,
+            "triggers",
+            &serde_json::json!({
+                "side": 1,
+                "inner": 4,
+                "outer_raw": 34,
+                "point1": [85, 85],
+                "point2": [170, 170],
+            })
+        )
+        .is_err()
+    );
+    // Direct payload tampering on disabled Right side rejected by boundary()
+    assert!(boundary(&s_left_only, "triggers", &orig_triggers, &next_triggers).is_err());
+}
+
+#[tokio::test]
+async fn sticks_and_triggers_transactional_save_verify_and_undo_roundtrip() {
+    let mut m = Mock::new();
+    let dir = tempfile::tempdir().unwrap();
+    let baseline = m.snapshot.clone();
+
+    let stick_target = desired_setting(
+        &baseline,
+        "sticks",
+        &serde_json::json!({
+            "side": 0,
+            "inner": 8,
+            "outer_raw": 8,
+            "point1": [35, 35],
+            "point2": [136, 204],
+            "invert_x": false,
+            "invert_y": true,
+            "swap": false,
+        }),
+    )
+    .unwrap();
+    let trigger_target = desired_setting(
+        &baseline,
+        "triggers",
+        &serde_json::json!({
+            "side": 1,
+            "inner": 30,
+            "outer_raw": 60,
+            "point1": [142, 142],
+            "point2": [220, 157],
+        }),
+    )
+    .unwrap();
+
+    let saved = execute(
+        &mut m,
+        dir.path(),
+        "save",
+        vec![
+            Edit {
+                key: "sticks".into(),
+                expected: baseline.record("sticks").unwrap(),
+                target: stick_target.clone(),
+            },
+            Edit {
+                key: "triggers".into(),
+                expected: baseline.record("triggers").unwrap(),
+                target: trigger_target.clone(),
+            },
+        ],
+    )
+    .await
+    .unwrap();
+    assert_eq!(saved.journal.state, "completed");
+    assert_eq!(saved.snapshot.record("sticks").unwrap(), stick_target);
+    assert_eq!(saved.snapshot.record("triggers").unwrap(), trigger_target);
+
+    let undone = execute(
+        &mut m,
+        dir.path(),
+        "undo",
+        undo_edits(&saved.journal).unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(undone.journal.state, "completed");
+    assert_eq!(
+        undone.snapshot.record("sticks").unwrap(),
+        baseline.record("sticks").unwrap()
+    );
+    assert_eq!(
+        undone.snapshot.record("triggers").unwrap(),
+        baseline.record("triggers").unwrap()
+    );
+}

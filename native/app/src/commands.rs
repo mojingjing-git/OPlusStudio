@@ -82,6 +82,23 @@ pub enum Request {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "feature", rename_all = "snake_case")]
 pub enum Setting {
+    StickCurve {
+        side: u8,
+        inner: u8,
+        outer_raw: u8,
+        point1: [u8; 2],
+        point2: [u8; 2],
+        invert_x: bool,
+        invert_y: bool,
+        swap: bool,
+    },
+    TriggerCurve {
+        side: u8,
+        inner: u8,
+        outer_raw: u8,
+        point1: [u8; 2],
+        point2: [u8; 2],
+    },
     Motors { levels: [u8; 4] },
     MotorChannel { channel: u8, level: u8 },
     Remapping { source: u8, target: u8 },
@@ -181,7 +198,9 @@ fn view(snapshot: &Snapshot) -> Result<Value> {
         "support_tier": tier,
         "capabilities_info": caps.map(|c| json!({
             "sticks": c.sticks,
+            "stick_sides": c.stick_sides(),
             "triggers": c.triggers,
+            "trigger_sides": c.trigger_sides(),
             "motors": c.motors,
             "motor_channels": c.motor_channels(),
             "macros": c.macros,
@@ -221,7 +240,7 @@ pub fn initial(state: tauri::State<'_, State>) -> Value {
     json!({
         "address": address,
         "recoveries": tx::pending(&root),
-        "version": "0.6.0",
+        "version": "0.7.0",
         "keymap": state.0.macro_runner.store(),
         "runner": state.0.macro_runner.snapshot(),
     })
@@ -515,6 +534,44 @@ async fn dispatch(app: &tauri::AppHandle, state: &State, request: Request) -> Re
                         let mut staged = s.clone();
                         for setting in settings {
                             let (key, change) = match setting {
+                                Setting::StickCurve {
+                                    side,
+                                    inner,
+                                    outer_raw,
+                                    point1,
+                                    point2,
+                                    invert_x,
+                                    invert_y,
+                                    swap,
+                                } => (
+                                    "sticks",
+                                    json!({
+                                        "side": side,
+                                        "inner": inner,
+                                        "outer_raw": outer_raw,
+                                        "point1": point1,
+                                        "point2": point2,
+                                        "invert_x": invert_x,
+                                        "invert_y": invert_y,
+                                        "swap": swap,
+                                    }),
+                                ),
+                                Setting::TriggerCurve {
+                                    side,
+                                    inner,
+                                    outer_raw,
+                                    point1,
+                                    point2,
+                                } => (
+                                    "triggers",
+                                    json!({
+                                        "side": side,
+                                        "inner": inner,
+                                        "outer_raw": outer_raw,
+                                        "point1": point1,
+                                        "point2": point2,
+                                    }),
+                                ),
                                 Setting::Motors { levels } => ("motors", json!({"levels": levels})),
                                 Setting::MotorChannel { channel, level } => {
                                     ("motors", json!({"channel": channel, "level": level}))
@@ -623,6 +680,7 @@ mod tests {
     fn browser_json_map_keys_deserialize_before_hardware() {
         for text in [
             r#"{"action":"save","changes":{"0":{"kind":"hold","keys":[1]}},"settings":[{"feature":"motor_channel","channel":0,"level":80}]}"#,
+            r#"{"action":"save","changes":{},"settings":[{"feature":"stick_curve","side":0,"inner":6,"outer_raw":8,"point1":[85,85],"point2":[170,170],"invert_x":false,"invert_y":true,"swap":false},{"feature":"trigger_curve","side":1,"inner":4,"outer_raw":34,"point1":[35,35],"point2":[136,204]}]}"#,
             r#"{"action":"export","changes":{"7":{"kind":"macro","sequence":"A:100/60","loop_ms":0,"trigger":0}}}"#,
             r#"{"action":"labels","labels":{"0":"M1","1":"M2","6":"ML","7":"MR"}}"#,
             r#"{"action":"diagnostic"}"#,

@@ -1,6 +1,6 @@
 # O+ Studio 零安装网页驱动与 GitHub Pages 部署指南
 
-O+ Studio 0.6.0 支持**同源双形态发布**：同一套代码库既可构建为免安装 Windows 桌面版（`OPlusStudio.Native.exe`），也可直接托管到 **GitHub Pages** 作为纯前端零安装**网页驱动**运行，无任何后端服务器依赖，所有数据 100% 保存在用户本地浏览器（`IndexedDB`）与手柄闪存中。
+O+ Studio 0.7.0 支持**同源双形态发布**：同一套代码库既可构建为免安装 Windows 桌面版（`OPlusStudio.Native.exe`），也可直接托管到 **GitHub Pages** 作为纯前端零安装**网页驱动**运行，无任何后端服务器依赖，所有数据 100% 保存在用户本地浏览器（`IndexedDB`）与手柄闪存中。
 
 ---
 
@@ -10,6 +10,7 @@ O+ Studio 0.6.0 支持**同源双形态发布**：同一套代码库既可构建
 | :--- | :---: | :---: |
 | **蓝牙读取动态能力描述符（Verified / Compatible / ReadOnly）** | 支持（Web Bluetooth） | 支持（Windows BLE） |
 | **板载背键映射 / 多步顺序宏 / 跨固件配置转译导入导出** | 支持 | 支持 |
+| **板载摇杆死区 · 响应曲线 · 轴反向 · 扳机四档行程与曲线（`0x31`/`0x32`）** | 支持 | 支持 |
 | **板载振动通道 / 标准按键改键 / RGB 灯区调节** | 支持 | 支持 |
 | **冲突检测 · SHA-256 备份 · 回读核对 · 逆序回滚 · 恢复中心** | 支持（IndexedDB 持久化） | 支持（本地原子文件） |
 | **手柄实时输入遥测 & 实体背键引导识别** | 支持（W3C Gamepad API） | 支持（XInput） |
@@ -31,7 +32,7 @@ O+ Studio 0.6.0 支持**同源双形态发布**：同一套代码库既可构建
 ```powershell
 git init -b main
 git add .
-git commit -m "feat: O+ Studio 0.6.0 native desktop & WebBLE driver"
+git commit -m "feat: O+ Studio 0.7.0 native desktop & WebBLE driver"
 git remote add origin https://github.com/<你的用户名>/<你的仓库名>.git
 git push -u origin main
 ```
@@ -52,8 +53,8 @@ git push -u origin main
 当你希望让网页端点击 **“下载 Windows 桌面版运行宏”** 按钮直接跳转到最新版桌面程序时，只需推送一个 `v*` 版本标签：
 
 ```powershell
-git tag v0.6.0
-git push origin v0.6.0
+git tag v0.7.0
+git push origin v0.7.0
 ```
 
 GitHub Actions 工作流 **Release Windows Desktop Edition**（`.github/workflows/release-desktop.yml`）会自动在云端 `windows-latest` 环境完成：
