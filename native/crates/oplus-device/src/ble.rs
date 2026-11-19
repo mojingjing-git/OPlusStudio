@@ -175,9 +175,16 @@ impl Session {
             .subsec_nanos() as u8
     }
 
+    fn push_trace(&mut self, entry: serde_json::Value) {
+        if self.trace.len() >= 512 {
+            self.trace.remove(0);
+        }
+        self.trace.push(entry);
+    }
+
     async fn exchange(&mut self, wire: Vec<u8>) -> Result<Packet> {
         let sent = p::parse(&wire)?;
-        self.trace.push(json!({
+        self.push_trace(json!({
             "direction": "tx",
             "opcode": sent.opcode,
             "serial": sent.serial,
@@ -199,7 +206,7 @@ impl Session {
                     continue;
                 }
                 if let Ok(packet) = p::parse(&n.value) {
-                    self.trace.push(json!({
+                    self.push_trace(json!({
                         "direction": "rx",
                         "opcode": packet.opcode,
                         "serial": packet.serial,

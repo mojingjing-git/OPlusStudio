@@ -377,7 +377,7 @@ async fn run() -> oplus_core::Result<()> {
                 let sanitized_after = sanitize_snapshot(after);
 
                 let report = json!({
-                    "app_version": "0.7.0",
+                    "app_version": env!("CARGO_PKG_VERSION"),
                     "address": sanitized_after.address,
                     "device_name": "致动O+_XXXXXX",
                     "support_tier": sanitized_after.support_tier(),

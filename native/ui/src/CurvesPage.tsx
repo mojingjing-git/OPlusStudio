@@ -2,6 +2,8 @@ import { useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import { Copy, RotateCcw, Sparkles, Undo2 } from "lucide-react";
 import {
   CURVE_AXIS_MAX,
+  CURVE_POINT_X_MAX,
+  CURVE_POINT_X_MIN,
   CURVE_PRESETS,
   STICK_MAX_PROGRESS,
   TRIGGER_GEARS,
@@ -9,10 +11,10 @@ import {
   type CurvePoint,
   curveShape,
   curveSideMask,
-  evaluateCurveY,
   matchCurvePreset,
   matchTriggerGear,
   parseCurveRecordChannels,
+  projectCurvePreview,
 } from "./curves";
 import type {
   Input,
@@ -25,6 +27,10 @@ interface CurvesPageProps {
   view: View;
   settings: any[];
   pad: Input | undefined;
+  inputs?: Input[];
+  selectedSlot?: number | null;
+  onSelectSlot?: (slot: number | null) => void;
+  isTauri?: boolean;
   busy: boolean;
   onStage: (s: StickCurveSetting | TriggerCurveSetting) => void;
   onUnstage: (feature: "stick_curve" | "trigger_curve", side: number) => void;
@@ -36,6 +42,22 @@ const PLOT_SIZE = 240;
 function clampInt(val: number, min: number, max: number): number {
   if (!Number.isFinite(val)) return min;
   return Math.max(min, Math.min(max, Math.round(val)));
+}
+
+function sanitizeControlPoints(
+  p1: CurvePoint,
+  p2: CurvePoint,
+): [CurvePoint, CurvePoint] {
+  const safeP1X = clampInt(p1[0], CURVE_POINT_X_MIN, CURVE_POINT_X_MAX - 1);
+  const safeP2X = clampInt(
+    Math.max(safeP1X + 1, p2[0]),
+    safeP1X + 1,
+    CURVE_POINT_X_MAX,
+  );
+  return [
+    [safeP1X, clampInt(p1[1], 0, CURVE_AXIS_MAX)],
+    [safeP2X, clampInt(p2[1], 0, CURVE_AXIS_MAX)],
+  ];
 }
 
 function formatHalfPct(val200: number): string {
@@ -99,31 +121,25 @@ function CurveCanvas({
   } | null = null;
 
   if (liveMagnitude !== null) {
-    const clampedMag = Math.max(0, Math.min(1, liveMagnitude));
-    const progress = clampedMag * maxProgress;
-    let curveX: number;
-    let zoneLabel: string;
-    if (progress <= inner && inner > 0) {
-      curveX = 0;
-      zoneLabel = "死区内";
-    } else if (progress >= outerThreshold) {
-      curveX = CURVE_AXIS_MAX;
-      zoneLabel = "满行程";
-    } else {
-      const span = Math.max(1, outerThreshold - inner);
-      curveX = ((progress - inner) / span) * CURVE_AXIS_MAX;
-      zoneLabel = progress === 0 ? "静止" : "曲线工作区";
-    }
-    const curveY = evaluateCurveY(point1, point2, curveX);
+    const projected = projectCurvePreview(
+      liveMagnitude,
+      inner,
+      outerRaw,
+      maxProgress,
+      point1,
+      point2,
+    );
     liveState = {
-      rawPx: clampedMag * PLOT_SIZE,
-      dotX: (curveX / CURVE_AXIS_MAX) * PLOT_SIZE,
-      dotY: PLOT_SIZE - (curveY / CURVE_AXIS_MAX) * PLOT_SIZE,
-      inPct: Math.round(clampedMag * 100),
-      outPct: Math.round((curveY / CURVE_AXIS_MAX) * 100),
-      zoneLabel,
+      rawPx: projected.clampedMag * PLOT_SIZE,
+      dotX: (projected.curveX / CURVE_AXIS_MAX) * PLOT_SIZE,
+      dotY: PLOT_SIZE - (projected.curveY / CURVE_AXIS_MAX) * PLOT_SIZE,
+      inPct: projected.inPct,
+      outPct: projected.outPct,
+      zoneLabel: projected.zoneLabel,
     };
   }
+
+  const [safeP1, safeP2] = sanitizeControlPoints(point1, point2);
 
   const updateFromPointer = (
     which: 1 | 2,
@@ -139,11 +155,17 @@ function CurveCanvas({
     const rawY = Math.round(ny * CURVE_AXIS_MAX);
 
     if (which === 1) {
-      const nextP1: CurvePoint = [clampInt(rawX, 0, point2[0]), clampInt(rawY, 0, 255)];
-      onPointsChange(nextP1, point2);
+      const nextP1: CurvePoint = [
+        clampInt(rawX, CURVE_POINT_X_MIN, safeP2[0] - 1),
+        clampInt(rawY, 0, CURVE_AXIS_MAX),
+      ];
+      onPointsChange(nextP1, safeP2);
     } else {
-      const nextP2: CurvePoint = [clampInt(rawX, point1[0], 255), clampInt(rawY, 0, 255)];
-      onPointsChange(point1, nextP2);
+      const nextP2: CurvePoint = [
+        clampInt(rawX, safeP1[0] + 1, CURVE_POINT_X_MAX),
+        clampInt(rawY, 0, CURVE_AXIS_MAX),
+      ];
+      onPointsChange(safeP1, nextP2);
     }
   };
 
@@ -179,15 +201,19 @@ function CurveCanvas({
   return (
     <div className="curve-canvas-block">
       <div className="curve-canvas-bar">
-        <span className="subtle">响应曲线画布（0–255 单调三次样条）</span>
+        <span className="subtle">响应曲线画布（固定端点 0,0 → 255,255）</span>
         {liveState ? (
-          <span className="curve-telemetry-pill">
+          <span
+            className="curve-telemetry-pill"
+            title="系统输入流经当前草稿参数计算的软件预览估算值，非手柄蓝牙直接回传"
+          >
             <span className="dot online" />
-            输入 {liveState.inPct}% → 输出 {liveState.outPct}% · {liveState.zoneLabel}
+            草稿估算 · 输入 {liveState.inPct}% → 输出 {liveState.outPct}% ·{" "}
+            {liveState.zoneLabel}
           </span>
         ) : (
           <span className="curve-telemetry-pill muted">
-            拖拽 P1 / P2 圆点实时塑形
+            拖拽 P1 / P2 圆点实时塑形（草稿预览）
           </span>
         )}
       </div>
@@ -423,15 +449,22 @@ function CurveCanvas({
           <span>P1 横坐标 X</span>
           <input
             type="number"
-            min={0}
-            max={point2[0]}
+            min={CURVE_POINT_X_MIN}
+            max={safeP2[0] - 1}
             disabled={disabled}
             aria-label={`${idPrefix} P1 X`}
             value={point1[0]}
             onChange={(e) =>
               onPointsChange(
-                [clampInt(Number(e.target.value), 0, point2[0]), point1[1]],
-                point2,
+                [
+                  clampInt(
+                    Number(e.target.value),
+                    CURVE_POINT_X_MIN,
+                    safeP2[0] - 1,
+                  ),
+                  safeP1[1],
+                ],
+                safeP2,
               )
             }
           />
@@ -441,14 +474,14 @@ function CurveCanvas({
           <input
             type="number"
             min={0}
-            max={255}
+            max={CURVE_AXIS_MAX}
             disabled={disabled}
             aria-label={`${idPrefix} P1 Y`}
             value={point1[1]}
             onChange={(e) =>
               onPointsChange(
-                [point1[0], clampInt(Number(e.target.value), 0, 255)],
-                point2,
+                [safeP1[0], clampInt(Number(e.target.value), 0, CURVE_AXIS_MAX)],
+                safeP2,
               )
             }
           />
@@ -457,15 +490,19 @@ function CurveCanvas({
           <span>P2 横坐标 X</span>
           <input
             type="number"
-            min={point1[0]}
-            max={255}
+            min={safeP1[0] + 1}
+            max={CURVE_POINT_X_MAX}
             disabled={disabled}
             aria-label={`${idPrefix} P2 X`}
             value={point2[0]}
             onChange={(e) =>
-              onPointsChange(point1, [
-                clampInt(Number(e.target.value), point1[0], 255),
-                point2[1],
+              onPointsChange(safeP1, [
+                clampInt(
+                  Number(e.target.value),
+                  safeP1[0] + 1,
+                  CURVE_POINT_X_MAX,
+                ),
+                safeP2[1],
               ])
             }
           />
@@ -475,14 +512,14 @@ function CurveCanvas({
           <input
             type="number"
             min={0}
-            max={255}
+            max={CURVE_AXIS_MAX}
             disabled={disabled}
             aria-label={`${idPrefix} P2 Y`}
             value={point2[1]}
             onChange={(e) =>
-              onPointsChange(point1, [
-                point2[0],
-                clampInt(Number(e.target.value), 0, 255),
+              onPointsChange(safeP1, [
+                safeP2[0],
+                clampInt(Number(e.target.value), 0, CURVE_AXIS_MAX),
               ])
             }
           />
@@ -496,6 +533,10 @@ export default function CurvesPage({
   view,
   settings,
   pad,
+  inputs = [],
+  selectedSlot = null,
+  onSelectSlot,
+  isTauri = true,
   busy,
   onStage,
   onUnstage,
@@ -595,8 +636,10 @@ export default function CurvesPage({
 
   const commitStick = (
     side: 0 | 1,
-    next: Omit<StickCurveSetting, "feature" | "side">,
+    rawNext: Omit<StickCurveSetting, "feature" | "side">,
   ) => {
+    const [p1, p2] = sanitizeControlPoints(rawNext.point1, rawNext.point2);
+    const next = { ...rawNext, point1: p1, point2: p2 };
     const { base } = getStickState(side);
     const matchesBase =
       next.inner === base.inner &&
@@ -617,8 +660,10 @@ export default function CurvesPage({
 
   const commitTrigger = (
     side: 0 | 1,
-    next: Omit<TriggerCurveSetting, "feature" | "side">,
+    rawNext: Omit<TriggerCurveSetting, "feature" | "side">,
   ) => {
+    const [p1, p2] = sanitizeControlPoints(rawNext.point1, rawNext.point2);
+    const next = { ...rawNext, point1: p1, point2: p2 };
     const { base } = getTriggerState(side);
     const matchesBase =
       next.inner === base.inner &&
@@ -639,7 +684,7 @@ export default function CurvesPage({
 
   return (
     <div className="curves-page">
-      {/* Top Mode Switcher */}
+      {/* Top Mode Switcher & Draft Telemetry Source Bar */}
       <div className="panel curves-header-bar">
         <div className="segmented curves-segmented">
           <button
@@ -662,6 +707,37 @@ export default function CurvesPage({
               <span className="draft-tag">{triggerDraftCount} 草稿</span>
             )}
           </button>
+        </div>
+
+        <div className="curves-preview-note">
+          <span>
+            实时光点为<strong>草稿软件估算</strong>（读取系统{" "}
+            {isTauri ? "XInput" : "Gamepad"} 输入套用当前草稿曲线，与蓝牙配置通道独立；以保存至手柄后的实际固件输出为准）。
+          </span>
+          {inputs.length > 0 && (
+            <div className="curves-slot-picker">
+              <span>
+                {inputs.length > 1 ? "多手柄预览槽位：" : "当前输入槽位："}
+              </span>
+              {inputs.map((item) => {
+                const active = pad?.slot === item.slot;
+                return (
+                  <button
+                    key={item.slot}
+                    type="button"
+                    className={
+                      active && (selectedSlot === item.slot || inputs.length === 1 || selectedSlot === null)
+                        ? "selected"
+                        : ""
+                    }
+                    onClick={() => onSelectSlot?.(item.slot)}
+                  >
+                    #{item.slot + 1}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 

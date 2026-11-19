@@ -1,5 +1,5 @@
 /* ==========================================================================
-   O+ Studio 0.7.0 — Apple iOS 26 / macOS Tahoe 26 "Liquid Glass" Design System
+   O+ Studio 0.7.1 — Apple iOS 26 / macOS Tahoe 26 "Liquid Glass" Design System
    Optical Specular Rim · Ambient Refraction · Concentric Squircle & Capsule UI
    ========================================================================== */
 
@@ -89,10 +89,14 @@ html {
   --subtle-fg: #6c7e96;
   --select-menu-bg: #f7faff;
 
-  --accent: #0071e3;
-  --accent-bright: #3da0ff;
-  --accent-hover: #005ec2;
+  --accent: #0062cc;
+  --accent-bright: #2b8cff;
+  --accent-hover: #004fa8;
   --accent-fg: #ffffff;
+  --accent-fill-top: #0b66d4;
+  --accent-fill-bot: #0051b3;
+  --accent-fill-hover-top: #126ee0;
+  --accent-fill-hover-bot: #00479e;
   --accent-tint: rgba(0, 113, 227, 0.11);
   --accent-tint-strong: rgba(0, 113, 227, 0.17);
   --accent-border: rgba(0, 113, 227, 0.38);
@@ -186,10 +190,14 @@ html[data-theme="dark"] {
   --subtle-fg: #7e94b4;
   --select-menu-bg: #182235;
 
-  --accent: #2997ff;
-  --accent-bright: #64b5ff;
-  --accent-hover: #47a7ff;
+  --accent: #52a8ff;
+  --accent-bright: #7cc0ff;
+  --accent-hover: #70b8ff;
   --accent-fg: #ffffff;
+  --accent-fill-top: #0f67d4;
+  --accent-fill-bot: #094fa8;
+  --accent-fill-hover-top: #1670de;
+  --accent-fill-hover-bot: #0b58ba;
   --accent-tint: rgba(41, 151, 255, 0.17);
   --accent-tint-strong: rgba(41, 151, 255, 0.25);
   --accent-border: rgba(82, 173, 255, 0.48);
@@ -674,8 +682,12 @@ summary {
   width: 2.65rem;
   height: 2.65rem;
   border-radius: 0.82rem;
-  background: linear-gradient(145deg, var(--accent-bright) 0%, var(--accent) 100%);
-  color: #ffffff;
+  background: linear-gradient(
+    145deg,
+    var(--accent-fill-top) 0%,
+    var(--accent-fill-bot) 100%
+  );
+  color: var(--accent-fg);
   font-size: 1.28rem;
   font-weight: 750;
   letter-spacing: -0.06em;
@@ -769,8 +781,12 @@ html[data-theme="dark"] .sidebar nav button.active {
 
 .count {
   margin-left: auto;
-  background: linear-gradient(180deg, var(--accent-bright), var(--accent));
-  color: #fff;
+  background: linear-gradient(
+    180deg,
+    var(--accent-fill-top),
+    var(--accent-fill-bot)
+  );
+  color: var(--accent-fg);
   border-radius: 999px;
   padding: 0.05rem 0.48rem;
   font-size: 0.74rem;
@@ -919,32 +935,32 @@ html[data-theme="dark"] .sidebar nav button.active {
   font-variant-numeric: tabular-nums;
 }
 
-/* Jewel Liquid Accent Buttons */
+/* Jewel Liquid Accent Buttons (WCAG AA >= 4.5:1 across all stops) */
 .primary {
   background: linear-gradient(
     180deg,
-    var(--accent-bright) 0%,
-    var(--accent) 100%
+    var(--accent-fill-top) 0%,
+    var(--accent-fill-bot) 100%
   );
   color: var(--accent-fg);
   border-color: rgba(255, 255, 255, 0.45);
   outline-color: rgba(0, 88, 190, 0.35);
   box-shadow:
-    inset 0 1.5px 1px rgba(255, 255, 255, 0.58),
-    inset 0 -1px 1px rgba(0, 35, 95, 0.28),
+    inset 0 1.5px 1px rgba(255, 255, 255, 0.52),
+    inset 0 -1px 1px rgba(0, 28, 78, 0.34),
     0 8px 20px -5px var(--accent-glow);
 }
 
 .primary:hover:not(:disabled) {
   background: linear-gradient(
     180deg,
-    #57b0ff 0%,
-    var(--accent-hover) 100%
+    var(--accent-fill-hover-top) 0%,
+    var(--accent-fill-hover-bot) 100%
   );
   border-color: rgba(255, 255, 255, 0.65);
-  color: #ffffff;
+  color: var(--accent-fg);
   box-shadow:
-    inset 0 1.5px 1px rgba(255, 255, 255, 0.72),
+    inset 0 1.5px 1px rgba(255, 255, 255, 0.66),
     0 10px 24px -4px var(--accent-glow);
 }
 
@@ -1419,10 +1435,10 @@ html[data-theme="dark"] .segmented button.active {
 .key-picker button.selected {
   background: linear-gradient(
     180deg,
-    var(--accent-bright) 0%,
-    var(--accent) 100%
+    var(--accent-fill-top) 0%,
+    var(--accent-fill-bot) 100%
   );
-  color: #ffffff;
+  color: var(--accent-fg);
   border-color: rgba(255, 255, 255, 0.55);
   box-shadow:
     inset 0 1px 0.5px rgba(255, 255, 255, 0.6),
@@ -1969,10 +1985,10 @@ dt {
 .input-buttons > span.pressed {
   background: linear-gradient(
     180deg,
-    var(--accent-bright) 0%,
-    var(--accent) 100%
+    var(--accent-fill-top) 0%,
+    var(--accent-fill-bot) 100%
   );
-  color: #ffffff;
+  color: var(--accent-fg);
   border-color: rgba(255, 255, 255, 0.65);
   transform: scale(0.95);
   box-shadow:
@@ -2602,11 +2618,11 @@ html[data-theme="light"] .sync-tag.ok {
 .rear-slot-pills button.selected {
   background: linear-gradient(
     180deg,
-    var(--accent-bright) 0%,
-    var(--accent) 100%
+    var(--accent-fill-top) 0%,
+    var(--accent-fill-bot) 100%
   );
   border-color: rgba(255, 255, 255, 0.55);
-  color: #ffffff;
+  color: var(--accent-fg);
   box-shadow:
     inset 0 1px 0.5px rgba(255, 255, 255, 0.6),
     0 5px 14px -4px var(--accent-glow);
@@ -2643,10 +2659,10 @@ html[data-theme="light"] .sync-tag.ok {
 .pad-trigger-grid button.selected {
   background: linear-gradient(
     180deg,
-    var(--accent-bright) 0%,
-    var(--accent) 100%
+    var(--accent-fill-top) 0%,
+    var(--accent-fill-bot) 100%
   );
-  color: #ffffff;
+  color: var(--accent-fg);
   border-color: rgba(255, 255, 255, 0.55);
   box-shadow:
     inset 0 1px 0.5px rgba(255, 255, 255, 0.6),
@@ -2925,10 +2941,47 @@ html[data-theme="light"] .sync-tag.ok {
 
 .curves-header-bar {
   padding: 0.65rem 0.95rem;
+  display: grid;
+  gap: 0.55rem;
 }
 
 .curves-segmented {
   margin: 0;
+}
+
+.curves-preview-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.9rem;
+  font-size: 0.76rem;
+  color: var(--muted);
+  padding: 0.12rem 0.25rem 0;
+}
+
+.curves-slot-picker {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.32rem;
+}
+
+.curves-slot-picker > button {
+  min-height: 1.72rem;
+  padding: 0.14rem 0.56rem;
+  border-radius: 999px;
+  font-size: 0.73rem;
+}
+
+.curves-slot-picker > button.selected {
+  background: linear-gradient(
+    180deg,
+    var(--accent-fill-top) 0%,
+    var(--accent-fill-bot) 100%
+  );
+  color: var(--accent-fg);
+  border-color: rgba(255, 255, 255, 0.52);
 }
 
 .curves-grid {
@@ -3189,10 +3242,10 @@ html[data-theme="dark"] .curve-deadzone-fill.outer {
 .preset-pills > button.selected {
   background: linear-gradient(
     180deg,
-    var(--accent-bright) 0%,
-    var(--accent) 100%
+    var(--accent-fill-top) 0%,
+    var(--accent-fill-bot) 100%
   );
-  color: #ffffff;
+  color: var(--accent-fg);
   border-color: rgba(255, 255, 255, 0.55);
   box-shadow:
     inset 0 1px 0.5px rgba(255, 255, 255, 0.6),

@@ -5,6 +5,7 @@
  */
 
 import {
+  APP_VERSION,
   type Change,
   type KbStep,
   type KeymapAction,
@@ -951,8 +952,12 @@ export function validateCurveChannel(ch: ByteSource, maxProgress: number): void 
   if (inner + outerRaw >= maxProgress) {
     throw new Error("内死区与外死区之和必须小于最大行程，以保留有效触发区间");
   }
-  if ((ch[2] & 0xff) > (ch[4] & 0xff)) {
-    throw new Error("响应曲线控制点 P1 的横坐标不能大于 P2");
+  const p1x = ch[2] & 0xff;
+  const p2x = ch[4] & 0xff;
+  if (p1x === 0 || p2x === 255 || p1x >= p2x) {
+    throw new Error(
+      "响应曲线控制点横坐标需满足 1 ≤ P1.x < P2.x ≤ 254，以保留固定端点 (0,0) 与 (255,255)",
+    );
   }
 }
 
@@ -968,6 +973,92 @@ function parseCurvePoint(val: unknown, name: string): [number, number] {
     throw new Error(`${name}.y 超出 0–255`);
   }
   return [x, y];
+}
+
+export function validateRestoreRecord(
+  snapshot: Snapshot,
+  key: string,
+  p: ByteSource,
+): void {
+  if (supportTier(snapshot) === "read_only") {
+    throw new Error("当前设备处于只读模式，禁止写入配置");
+  }
+  const caps = parseCapabilities(snapshot.capabilities);
+  const record = recordFromPayload(p);
+
+  if (key.startsWith("macro_")) {
+    const slotStr = key.slice(6);
+    if (!/^[0-9]+$/.test(slotStr)) {
+      throw new Error("无效槽位");
+    }
+    const slot = Number(slotStr);
+    if (!capabilityActiveSlots(caps).includes(slot)) {
+      throw new Error("无效或未启用的背键槽位");
+    }
+    snapshotLayout(snapshot).validate(p);
+    return;
+  }
+
+  if (key === "sticks") {
+    if ((caps.sticks & 0x03) === 0) {
+      throw new Error("设备不支持摇杆配置");
+    }
+    const orig = snapshotRecord(snapshot, "sticks");
+    if (orig.length !== 15 || p.length !== 15 || record.declared !== 14) {
+      throw new Error("摇杆记录长度不匹配");
+    }
+    return;
+  }
+
+  if (key === "triggers") {
+    if ((caps.triggers & 0x03) === 0) {
+      throw new Error("设备不支持扳机配置");
+    }
+    const orig = snapshotRecord(snapshot, "triggers");
+    if (orig.length !== 15 || p.length !== 15 || record.declared !== 14) {
+      throw new Error("扳机记录长度不匹配");
+    }
+    return;
+  }
+
+  if (key === "motors") {
+    if (caps.motors === 0) {
+      throw new Error("设备不支持振动配置");
+    }
+    const orig = snapshotRecord(snapshot, "motors");
+    if (orig.length < 5 || p.length !== orig.length) {
+      throw new Error("马达记录长度不匹配");
+    }
+    return;
+  }
+
+  if (key === "remapping") {
+    if (caps.changekey === 0) {
+      throw new Error("设备不支持标准按键改键");
+    }
+    const sources = snapshotKeys(snapshot, "remap_keys");
+    if (record.declared !== sources.length) {
+      throw new Error("标准映射长度与按键表不匹配");
+    }
+    return;
+  }
+
+  if (key === "lighting") {
+    if (caps.lighting === 0) {
+      throw new Error("设备不支持灯光配置");
+    }
+    const orig = snapshotRecord(snapshot, "lighting");
+    if (
+      orig.length < 7 ||
+      (orig.length - 1) % 6 !== 0 ||
+      p.length !== orig.length
+    ) {
+      throw new Error("灯光记录长度不匹配");
+    }
+    return;
+  }
+
+  throw new Error("不允许写入该记录");
 }
 
 export function validateRecord(
@@ -1012,7 +1103,9 @@ export function validateRecord(
     for (let side = 0; side < 2; side++) {
       if (hasStickSide(caps, side)) {
         const off = 1 + side * 7;
-        validateCurveChannel(arr.slice(off, off + 7), STICK_MAX_PROGRESS);
+        if (!bytesEqual(arr.slice(off, off + 7), orig.slice(off, off + 7))) {
+          validateCurveChannel(arr.slice(off, off + 7), STICK_MAX_PROGRESS);
+        }
       }
     }
     return;
@@ -1030,7 +1123,9 @@ export function validateRecord(
     for (let side = 0; side < 2; side++) {
       if (hasTriggerSide(caps, side)) {
         const off = 1 + side * 7;
-        validateCurveChannel(arr.slice(off, off + 7), TRIGGER_MAX_PROGRESS);
+        if (!bytesEqual(arr.slice(off, off + 7), orig.slice(off, off + 7))) {
+          validateCurveChannel(arr.slice(off, off + 7), TRIGGER_MAX_PROGRESS);
+        }
       }
     }
     return;
@@ -1087,7 +1182,21 @@ export function boundary(
   original: ByteSource,
   target: ByteSource,
 ): void {
-  validateRecord(snapshot, key, target);
+  boundaryForKind(snapshot, "save", key, original, target);
+}
+
+export function boundaryForKind(
+  snapshot: Snapshot,
+  kind: string,
+  key: string,
+  original: ByteSource,
+  target: ByteSource,
+): void {
+  if (kind === "undo" || kind === "recovery") {
+    validateRestoreRecord(snapshot, key, target);
+  } else {
+    validateRecord(snapshot, key, target);
+  }
   if (
     key.startsWith("macro_") &&
     ((original.length === 1 && original[0] === 0) ||
@@ -1607,7 +1716,7 @@ export function diagnosticBundle(snapshot: Snapshot): Record<string, unknown> {
   }
   return {
     format: "oplus-diagnostic-v1",
-    app_version: "0.7.0",
+    app_version: APP_VERSION,
     address: snapshot.address,
     support_tier: tier,
     effective_generation: effectiveGeneration(snapshot.identity),
@@ -2067,11 +2176,13 @@ export function validateKeymapStore(raw: any): KeymapStore {
   };
 }
 
+export const MAX_KEYMAP_BYTES = 8 * 1024 * 1024;
+
 export function exportKeymapProfile(profile: KeymapProfile): Record<string, unknown> {
   const clean = validateKeymapProfile(profile);
   return {
     format: "oplus-keymap-v1",
-    app_version: "0.6.0",
+    app_version: APP_VERSION,
     profile: clean,
   };
 }
@@ -2177,7 +2288,7 @@ function importLegacy04Profile(v: any): KeymapProfile {
 }
 
 export function importKeymapAny(data: Uint8Array | string): KeymapProfile {
-  const text = decodeUtf8NoBom(data, 256 * 1024, "键盘宏配置文件超过 256 KiB");
+  const text = decodeUtf8NoBom(data, MAX_KEYMAP_BYTES, "键盘宏配置文件超过 8 MiB");
   let v: any;
   try {
     v = JSON.parse(text);

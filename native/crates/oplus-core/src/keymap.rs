@@ -1006,21 +1006,23 @@ impl KeymapStore {
     }
 }
 
+pub const MAX_KEYMAP_BYTES: usize = 8 * 1024 * 1024;
+
 pub fn export_keymap_profile(profile: &KeymapProfile) -> Result<Value> {
     let mut clean = profile.clone();
     clean.validate()?;
     Ok(json!({
         "format": "oplus-keymap-v1",
-        "app_version": "0.6.0",
+        "app_version": env!("CARGO_PKG_VERSION"),
         "profile": clean,
     }))
 }
 
-/// Imports either a 0.6.0 `oplus-keymap-v1` / `KeymapProfile` / `KeymapStore` JSON,
+/// Imports either a 0.6.0+ `oplus-keymap-v1` / `KeymapProfile` / `KeymapStore` JSON,
 /// OR migrates a legacy 0.4.0 `profile.json` (`version: 1, mappings, macros`).
 pub fn import_keymap_profile(data: &[u8]) -> Result<KeymapProfile> {
-    if data.len() > 256 * 1024 {
-        return Err("键盘宏配置文件超过 256 KiB".into());
+    if data.len() > MAX_KEYMAP_BYTES {
+        return Err("键盘宏配置文件超过 8 MiB".into());
     }
     let text = std::str::from_utf8(data)
         .map_err(|_| "配置文件必须为 UTF-8 编码")?

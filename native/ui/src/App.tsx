@@ -42,6 +42,7 @@ import {
 import CurvesPage from "./CurvesPage";
 import KeymapPage from "./KeymapPage";
 import {
+  APP_VERSION,
   type View,
   type Change,
   type Program,
@@ -497,7 +498,8 @@ export default function App() {
     [keymapStore, setKeymapStore] = useState<KeymapStore>(defaultKeymapStore),
     [runnerSnapshot, setRunnerSnapshot] =
       useState<RunnerSnapshot>(defaultRunner),
-    [keymapModalOpen, setKeymapModalOpen] = useState(false);
+    [keymapModalOpen, setKeymapModalOpen] = useState(false),
+    [previewSlot, setPreviewSlot] = useState<number | null>(null);
 
   const [theme, setTheme] = useState(localStorage.getItem("theme") || "light"),
     [scale, setScale] = useState(localStorage.getItem("scale") || "100");
@@ -864,7 +866,11 @@ export default function App() {
     if (v) setNotice(v.message);
   };
 
-  const pad = input[0];
+  const preferredSlot = previewSlot ?? keymapStore.controller_slot ?? null;
+  const pad =
+    (preferredSlot !== null
+      ? input.find((p) => p.slot === preferredSlot)
+      : undefined) || input[0];
   const program = preview || (view ? view.programs[selected] || empty : empty);
   const isClassicSixSlot =
     activeSlots.length === 6 && activeSlots.every((s, idx) => s === idx);
@@ -1004,7 +1010,7 @@ export default function App() {
             </select>
           </label>
           <small className="version">
-            O+ Studio 0.7.0 · {isTauri ? "Rust" : "Web Driver"}
+            O+ Studio {APP_VERSION} · {isTauri ? "Rust" : "Web Driver"}
           </small>
         </div>
       </aside>
@@ -1085,6 +1091,24 @@ export default function App() {
                 <strong>Google Chrome</strong>{" "}
                 开启板载配置读写；当前仍可正常使用实时输入检测与键盘宏方案编辑。
               </span>
+            </div>
+          )}
+
+          {runnerSnapshot.load_error && (
+            <div className="message error" role="alert">
+              <strong>键盘宏文件未覆盖</strong>
+              <span>{runnerSnapshot.load_error}</span>
+              <button
+                className="icon"
+                aria-label="关闭加载提示"
+                onClick={() => {
+                  invoke<RunnerSnapshot>("keymap_dismiss_warning")
+                    .then((r) => setRunnerSnapshot(r))
+                    .catch(() => {});
+                }}
+              >
+                <X size={16} />
+              </button>
             </div>
           )}
 
@@ -1444,6 +1468,10 @@ export default function App() {
               view={view}
               settings={settings}
               pad={pad}
+              inputs={input}
+              selectedSlot={preferredSlot}
+              onSelectSlot={setPreviewSlot}
+              isTauri={isTauri}
               busy={busy}
               onStage={stageSetting}
               onUnstage={unstageSetting}
@@ -1460,9 +1488,24 @@ export default function App() {
             <section className="panel input-panel">
               <div className="section-heading">
                 <h2>{isTauri ? "Windows 游戏输入" : "手柄实时输入"}</h2>
-                <span className="pill">
-                  {isTauri ? "XInput · 只读" : "Gamepad · 只读"}
-                </span>
+                <div className="curve-card-badges">
+                  {input.length > 1 &&
+                    input.map((item) => (
+                      <button
+                        key={item.slot}
+                        type="button"
+                        className={
+                          pad?.slot === item.slot ? "secondary" : "text-button"
+                        }
+                        onClick={() => setPreviewSlot(item.slot)}
+                      >
+                        槽位 #{item.slot + 1}
+                      </button>
+                    ))}
+                  <span className="pill">
+                    {isTauri ? "XInput · 只读" : "Gamepad · 只读"}
+                  </span>
+                </div>
               </div>
               {!pad ? (
                 <div className="empty-small">

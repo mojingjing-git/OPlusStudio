@@ -103,6 +103,10 @@ export interface NavigatorBluetooth {
 // ============================================================================
 
 let cachedDevice: WebBluetoothDevice | null = null;
+const knownDevicesById = new Map<
+  string,
+  { device: WebBluetoothDevice; seenInGetDevices: boolean }
+>();
 let activeUnloadGuards = 0;
 
 function onBeforeUnload(e: BeforeUnloadEvent): void {
@@ -161,6 +165,28 @@ export function getCachedWebDeviceSummary(): {
 
 export function setCachedWebDeviceForTest(device: WebBluetoothDevice | null): void {
   cachedDevice = device;
+  if (!device) {
+    knownDevicesById.clear();
+  } else {
+    knownDevicesById.set(device.id, { device, seenInGetDevices: false });
+  }
+}
+
+export async function rememberWebBluetoothDevice(
+  device: WebBluetoothDevice,
+): Promise<void> {
+  let seenInGetDevices = false;
+  const bt = getNavigatorBluetooth();
+  if (bt && typeof bt.getDevices === "function") {
+    try {
+      const permitted = await bt.getDevices();
+      seenInGetDevices = permitted.some((d) => d.id === device.id);
+    } catch {
+      seenInGetDevices = false;
+    }
+  }
+  cachedDevice = device;
+  knownDevicesById.set(device.id, { device, seenInGetDevices });
 }
 
 function sleep(ms: number): Promise<void> {
@@ -215,6 +241,8 @@ export async function acquireWebBluetoothDevice(options?: {
   showAll?: boolean;
   preferredAddress?: string;
   preferredDeviceId?: string;
+  requireExactDevice?: boolean;
+  allowPickerForExactDevice?: boolean;
 }): Promise<WebBluetoothDevice> {
   const bt = getNavigatorBluetooth();
   if (!bt) {
@@ -225,35 +253,10 @@ export async function acquireWebBluetoothDevice(options?: {
 
   const forcePicker = Boolean(options?.forcePicker);
   const showAll = Boolean(options?.showAll);
-
-  if (!forcePicker) {
-    if (
-      cachedDevice &&
-      (!options?.preferredAddress ||
-        formatWebDeviceAddress(cachedDevice) === options.preferredAddress)
-    ) {
-      return cachedDevice;
-    }
-
-    if (typeof bt.getDevices === "function") {
-      try {
-        const permitted = await bt.getDevices();
-        const matched =
-          permitted.find(
-            (d) =>
-              (options?.preferredDeviceId && d.id === options.preferredDeviceId) ||
-              (options?.preferredAddress &&
-                formatWebDeviceAddress(d) === options.preferredAddress),
-          ) ?? (permitted.length === 1 ? permitted[0] : undefined);
-        if (matched) {
-          cachedDevice = matched;
-          return matched;
-        }
-      } catch {
-        // Ignore getDevices() errors when Permissions-Policy / flag is disabled
-      }
-    }
-  }
+  const requireExactDevice = Boolean(options?.requireExactDevice);
+  const allowPickerForExactDevice = Boolean(options?.allowPickerForExactDevice);
+  const preferredDeviceId = options?.preferredDeviceId?.trim() || "";
+  const preferredAddress = options?.preferredAddress?.trim() || "";
 
   const reqOptions: WebBluetoothRequestOptions = showAll
     ? {
@@ -272,10 +275,145 @@ export async function acquireWebBluetoothDevice(options?: {
         optionalServices: [SERVICE],
       };
 
+  if (requireExactDevice) {
+    let permitted: WebBluetoothDevice[] | null = null;
+    if (typeof bt.getDevices === "function") {
+      try {
+        permitted = await bt.getDevices();
+      } catch {
+        permitted = null;
+      }
+    }
+
+    if (preferredDeviceId) {
+      if (permitted !== null) {
+        const hit = permitted.find((d) => d.id === preferredDeviceId);
+        if (hit) {
+          knownDevicesById.set(hit.id, { device: hit, seenInGetDevices: true });
+          return hit;
+        }
+        const known = knownDevicesById.get(preferredDeviceId);
+        if (known && !known.seenInGetDevices && permitted.length === 0) {
+          return known.device;
+        }
+        if (known?.seenInGetDevices) {
+          knownDevicesById.delete(preferredDeviceId);
+          if (cachedDevice?.id === preferredDeviceId) {
+            cachedDevice = null;
+          }
+        }
+      } else {
+        const known = knownDevicesById.get(preferredDeviceId)?.device;
+        if (known) return known;
+        if (cachedDevice && cachedDevice.id === preferredDeviceId) {
+          return cachedDevice;
+        }
+      }
+
+      if (allowPickerForExactDevice) {
+        try {
+          const picked = await bt.requestDevice(reqOptions);
+          if (picked.id !== preferredDeviceId) {
+            throw new Error("所选手柄与目标恢复记录不是同一台设备，已停止操作");
+          }
+          return picked;
+        } catch (e) {
+          throw translateBleError(e);
+        }
+      }
+      throw new Error(
+        "未找到原目标手柄授权连接，已停止写入以防写错设备；请重新连接原手柄读取后再试",
+      );
+    }
+
+    if (preferredAddress) {
+      if (permitted !== null) {
+        const hits = permitted.filter(
+          (d) => formatWebDeviceAddress(d) === preferredAddress,
+        );
+        if (hits.length === 1) return hits[0];
+        if (hits.length > 1) {
+          throw new Error("检测到多只同名蓝牙手柄，请重新选择并读取目标手柄");
+        }
+        if (
+          permitted.length === 0 &&
+          cachedDevice &&
+          formatWebDeviceAddress(cachedDevice) === preferredAddress
+        ) {
+          return cachedDevice;
+        }
+      } else if (
+        cachedDevice &&
+        formatWebDeviceAddress(cachedDevice) === preferredAddress
+      ) {
+        return cachedDevice;
+      }
+
+      if (allowPickerForExactDevice) {
+        try {
+          const picked = await bt.requestDevice(reqOptions);
+          if (formatWebDeviceAddress(picked) !== preferredAddress) {
+            throw new Error("所选手柄与目标恢复记录不匹配，已停止操作");
+          }
+          return picked;
+        } catch (e) {
+          throw translateBleError(e);
+        }
+      }
+      throw new Error(
+        "未找到原目标手柄授权连接，已停止写入以防写错设备；请重新连接原手柄读取后再试",
+      );
+    }
+
+    throw new Error("缺少目标手柄完整设备标识，已停止写入");
+  }
+
+  if (!forcePicker) {
+    let permitted: WebBluetoothDevice[] | null = null;
+    if (typeof bt.getDevices === "function") {
+      try {
+        permitted = await bt.getDevices();
+      } catch {
+        permitted = null;
+      }
+    }
+
+    if (permitted !== null) {
+      const byId = preferredDeviceId
+        ? permitted.find((d) => d.id === preferredDeviceId)
+        : undefined;
+      if (byId) return byId;
+
+      const byAddr = preferredAddress
+        ? permitted.find((d) => formatWebDeviceAddress(d) === preferredAddress)
+        : undefined;
+      if (byAddr) return byAddr;
+
+      if (!preferredDeviceId && !preferredAddress && permitted.length === 1) {
+        return permitted[0];
+      }
+    }
+
+    if (cachedDevice) {
+      const known = knownDevicesById.get(cachedDevice.id);
+      const revoked =
+        permitted !== null &&
+        Boolean(known?.seenInGetDevices) &&
+        !permitted.some((d) => d.id === cachedDevice!.id);
+      if (
+        !revoked &&
+        ((preferredDeviceId && cachedDevice.id === preferredDeviceId) ||
+          (!preferredDeviceId &&
+            (!preferredAddress ||
+              formatWebDeviceAddress(cachedDevice) === preferredAddress)))
+      ) {
+        return cachedDevice;
+      }
+    }
+  }
+
   try {
-    const picked = await bt.requestDevice(reqOptions);
-    cachedDevice = picked;
-    return picked;
+    return await bt.requestDevice(reqOptions);
   } catch (e) {
     throw translateBleError(e);
   }
@@ -320,8 +458,11 @@ export class WebBleSession implements Device {
   private writeChar: WebBluetoothRemoteGATTCharacteristic | null = null;
   private notifyChar: WebBluetoothRemoteGATTCharacteristic | null = null;
   private onValueChanged: ((ev: Event) => void) | null = null;
-  private inbox: Uint8Array[] = [];
-  private waiters: ((frame: Uint8Array | null) => void)[] = [];
+  private pendingExchange: {
+    serial: number;
+    resolve: (packet: Packet) => void;
+    reject: (err: Error) => void;
+  } | null = null;
 
   public identity: Identity = {
     vid: "",
@@ -331,6 +472,7 @@ export class WebBleSession implements Device {
     generation: 0,
     sensor: 0,
   };
+  public readonly deviceId: string;
   public address: string;
   public canWrite = false;
   public writableSlots: number[] = [];
@@ -347,6 +489,7 @@ export class WebBleSession implements Device {
     opts?: WebBleSessionOptions,
   ) {
     this.device = device;
+    this.deviceId = device.id;
     this.address = formatWebDeviceAddress(device);
     this.requestTimeoutMs = opts?.requestTimeoutMs ?? 3000;
     this.chunkDelayMs = opts?.chunkDelayMs ?? 120;
@@ -403,19 +546,29 @@ export class WebBleSession implements Device {
       throw new Error("缺少配置通知特征");
     }
 
-    this.inbox = [];
-    this.waiters = [];
+    this.pendingExchange = null;
     const listener = (ev: Event) => {
       const target = (ev as WebBluetoothCharacteristicEvent).target ?? notifyChar;
       const dv = target?.value;
       if (!dv) return;
       const copy = new Uint8Array(dv.byteLength);
       copy.set(new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength));
-      const waiter = this.waiters.shift();
-      if (waiter) {
-        waiter(copy);
-      } else {
-        this.inbox.push(copy);
+      let packet: Packet;
+      try {
+        packet = parse(copy);
+      } catch {
+        return;
+      }
+      this.pushTrace({
+        direction: "rx",
+        opcode: packet.opcode,
+        serial: packet.serial,
+        payload: toHex(packet.payload),
+        wire: toHex(copy),
+      });
+      const active = this.pendingExchange;
+      if (active && packet.opcode === 0x19 && packet.serial === active.serial) {
+        active.resolve(packet);
       }
     };
 
@@ -439,13 +592,11 @@ export class WebBleSession implements Device {
     return Math.floor(Math.random() * 256) & 0xff;
   }
 
-  private nextNotification(): Promise<Uint8Array | null> {
-    if (this.inbox.length > 0) {
-      return Promise.resolve(this.inbox.shift()!);
+  private pushTrace(entry: Record<string, unknown>): void {
+    if (this.trace.length >= 512) {
+      this.trace.shift();
     }
-    return new Promise((resolve) => {
-      this.waiters.push(resolve);
-    });
+    this.trace.push(entry);
   }
 
   private async writeWire(wire: Uint8Array): Promise<void> {
@@ -469,7 +620,7 @@ export class WebBleSession implements Device {
 
   private async exchange(wire: Uint8Array): Promise<Packet> {
     const sent = parse(wire);
-    this.trace.push({
+    this.pushTrace({
       direction: "tx",
       opcode: sent.opcode,
       serial: sent.serial,
@@ -477,37 +628,42 @@ export class WebBleSession implements Device {
       wire: toHex(wire),
     });
 
-    const runExchange = async (): Promise<Packet> => {
-      await this.writeWire(wire);
-      while (true) {
-        const raw = await this.nextNotification();
-        if (raw === null) {
-          throw new Error("设备通知已断开");
-        }
-        let packet: Packet;
-        try {
-          packet = parse(raw);
-        } catch {
-          continue;
-        }
-        this.trace.push({
-          direction: "rx",
-          opcode: packet.opcode,
-          serial: packet.serial,
-          payload: toHex(packet.payload),
-          wire: toHex(raw),
-        });
-        if (packet.opcode === 0x19 && packet.serial === sent.serial) {
-          return packet;
-        }
-      }
-    };
+    if (this.pendingExchange) {
+      this.pendingExchange.reject(new Error("上一条蓝牙请求已被新请求取代"));
+      this.pendingExchange = null;
+    }
 
-    return withTimeout(
-      runExchange(),
-      this.requestTimeoutMs,
-      "手柄响应超时，请保持开机并关闭手机 KeyLinker",
-    );
+    return new Promise<Packet>((resolve, reject) => {
+      let settled = false;
+      const finish = (cb: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (this.pendingExchange === entry) {
+          this.pendingExchange = null;
+        }
+        cb();
+      };
+
+      const timer = setTimeout(() => {
+        finish(() =>
+          reject(new Error("手柄响应超时，请保持开机并关闭手机 KeyLinker")),
+        );
+      }, this.requestTimeoutMs);
+
+      const entry = {
+        serial: sent.serial,
+        resolve: (packet: Packet) => finish(() => resolve(packet)),
+        reject: (err: Error) => finish(() => reject(err)),
+      };
+
+      this.pendingExchange = entry;
+      this.writeWire(wire).catch((err) => {
+        finish(() =>
+          reject(err instanceof Error ? err : new Error(String(err))),
+        );
+      });
+    });
   }
 
   private async sendQuery(opcode: number, payload: readonly number[]): Promise<Packet> {
@@ -589,6 +745,7 @@ export class WebBleSession implements Device {
       );
       return {
         address: this.address,
+        device_id: this.deviceId,
         identity: { ...this.identity },
         raw,
         decoded,
@@ -621,6 +778,7 @@ export class WebBleSession implements Device {
       );
       return {
         address: this.address,
+        device_id: this.deviceId,
         identity: { ...this.identity },
         raw,
         decoded,
@@ -640,6 +798,7 @@ export class WebBleSession implements Device {
       );
       return {
         address: this.address,
+        device_id: this.deviceId,
         identity: { ...this.identity },
         raw,
         decoded,
@@ -756,6 +915,7 @@ export class WebBleSession implements Device {
 
     const snap: Snapshot = {
       address: this.address,
+      device_id: this.deviceId,
       identity: { ...this.identity },
       raw,
       decoded,
@@ -879,9 +1039,10 @@ export class WebBleSession implements Device {
   }
 
   async close(): Promise<void> {
-    while (this.waiters.length > 0) {
-      const w = this.waiters.shift();
-      w?.(null);
+    if (this.pendingExchange) {
+      const pending = this.pendingExchange;
+      this.pendingExchange = null;
+      pending.reject(new Error("设备通知已断开"));
     }
     if (this.notifyChar && this.onValueChanged) {
       this.notifyChar.removeEventListener(

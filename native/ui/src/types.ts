@@ -1,3 +1,5 @@
+export const APP_VERSION = "0.7.1";
+
 export type Change =
   | { kind: "hold"; keys: number[] }
   | { kind: "macro"; sequence: string; loop_ms: number; trigger: number }
@@ -58,6 +60,7 @@ export type BoardSetting =
 
 export type Snapshot = {
   address: string;
+  device_id?: string;
   identity: {
     vid: string;
     pid: string;
@@ -77,6 +80,7 @@ export type Snapshot = {
   };
   capabilities: RecordData;
   errors?: string[];
+  extra?: Record<string, unknown>;
 };
 
 export type Step = { mask: number; duration_ms: number };
@@ -87,6 +91,7 @@ export type Journal = {
   kind: string;
   state: string;
   address: string;
+  device_id?: string;
   records: {
     key: string;
     original: number[];
@@ -655,4 +660,5 @@ export type RunnerSnapshot = {
   last_panic: boolean;
   blocked_count: number;
   injection_warning: string | null;
+  load_error?: string | null;
 };

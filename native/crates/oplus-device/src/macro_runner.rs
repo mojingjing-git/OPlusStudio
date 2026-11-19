@@ -28,6 +28,8 @@ pub struct RunnerSnapshot {
     pub last_panic: bool,
     pub blocked_count: u64,
     pub injection_warning: Option<String>,
+    #[serde(default)]
+    pub load_error: Option<String>,
 }
 
 impl Default for RunnerSnapshot {
@@ -43,6 +45,7 @@ impl Default for RunnerSnapshot {
             last_panic: false,
             blocked_count: 0,
             injection_warning: None,
+            load_error: None,
         }
     }
 }
@@ -421,6 +424,7 @@ struct Control {
     recording_paused: bool,
     shutdown: bool,
     worker_parked: bool,
+    preserve_unloaded_file: bool,
     config_generation: u64,
     store: KeymapStore,
     lease: Option<KeymapLease>,
@@ -488,11 +492,32 @@ impl Drop for BlePauseGuard {
 impl MacroRunner {
     pub fn new(root: PathBuf) -> Self {
         let path = storage::keymap_path(&root);
-        let mut store = storage::read::<KeymapStore>(&path, 256 * 1024)
-            .ok()
-            .and_then(|mut s| s.validate().ok().map(|_| s))
-            .unwrap_or_else(KeymapStore::default_store);
-        let _ = store.validate();
+        let mut preserve_unloaded_file = false;
+        let mut load_error = None;
+        let store = if path.exists() {
+            match storage::read::<KeymapStore>(&path, oplus_core::keymap::MAX_KEYMAP_BYTES)
+                .and_then(|mut s| s.validate().map(|_| s))
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    preserve_unloaded_file = true;
+                    load_error = Some(format!(
+                        "加载本地键盘宏方案失败（原文件已完整保留，未覆盖）：{e}"
+                    ));
+                    let mut fallback = KeymapStore::default_store();
+                    let _ = fallback.validate();
+                    fallback
+                }
+            }
+        } else {
+            let mut fallback = KeymapStore::default_store();
+            let _ = fallback.validate();
+            fallback
+        };
+        let initial_snapshot = RunnerSnapshot {
+            load_error,
+            ..RunnerSnapshot::default()
+        };
 
         let shared = Arc::new(Shared {
             root,
@@ -502,10 +527,11 @@ impl MacroRunner {
                 recording_paused: false,
                 shutdown: false,
                 worker_parked: true,
+                preserve_unloaded_file,
                 config_generation: 1,
                 store,
                 lease: None,
-                snapshot: RunnerSnapshot::default(),
+                snapshot: initial_snapshot,
             }),
             wake_cv: Condvar::new(),
             parked_cv: Condvar::new(),
@@ -560,6 +586,7 @@ impl MacroRunner {
     pub fn dismiss_warning(&self) -> RunnerSnapshot {
         let mut ctrl = self.shared.ctrl.lock().unwrap();
         ctrl.snapshot.injection_warning = None;
+        ctrl.snapshot.load_error = None;
         ctrl.snapshot.last_panic = false;
         ctrl.snapshot.clone()
     }
@@ -600,8 +627,24 @@ impl MacroRunner {
 
     pub fn update_store(&self, mut store: KeymapStore) -> Result<(KeymapStore, RunnerSnapshot)> {
         store.validate()?;
-        storage::save(&storage::keymap_path(&self.shared.root), &store)?;
+        let path = storage::keymap_path(&self.shared.root);
+        let bytes = serde_json::to_vec_pretty(&store).map_err(|e| e.to_string())?;
+        if bytes.len() > oplus_core::keymap::MAX_KEYMAP_BYTES {
+            return Err("键盘宏方案库体积超过 8 MiB 上限，请精简规则或步骤".into());
+        }
         let mut ctrl = self.shared.ctrl.lock().unwrap();
+        if ctrl.preserve_unloaded_file && path.exists() {
+            let backup = self
+                .shared
+                .root
+                .join(format!("keymap-profiles.unloaded-{}.json", storage::id()));
+            std::fs::copy(&path, &backup).map_err(|e| {
+                format!("无法备份未成功加载的旧键盘宏文件，已拒绝覆盖：{e}")
+            })?;
+        }
+        storage::atomic(&path, &bytes)?;
+        ctrl.preserve_unloaded_file = false;
+        ctrl.snapshot.load_error = None;
         ctrl.store = store.clone();
         ctrl.config_generation += 1;
         let snap = ctrl.snapshot.clone();

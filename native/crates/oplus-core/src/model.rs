@@ -837,8 +837,8 @@ pub fn validate_curve_channel(ch: &[u8], max_progress: u8) -> Result<()> {
     if (inner as u16) + (outer_raw as u16) >= (max_progress as u16) {
         return Err("内死区与外死区之和必须小于最大行程，以保留有效触发区间".into());
     }
-    if ch[2] > ch[4] {
-        return Err("响应曲线控制点 P1 的横坐标不能大于 P2".into());
+    if ch[2] == 0 || ch[4] == 255 || ch[2] >= ch[4] {
+        return Err("响应曲线控制点横坐标需满足 1 ≤ P1.x < P2.x ≤ 254，以保留固定端点 (0,0) 与 (255,255)".into());
     }
     Ok(())
 }
@@ -857,6 +857,70 @@ fn parse_curve_point(val: &Value, name: &str) -> Result<[u8; 2]> {
         .filter(|&v| v <= 255)
         .ok_or_else(|| format!("{name}.y 超出 0–255"))? as u8;
     Ok([x, y])
+}
+
+pub fn validate_restore_record(snapshot: &Snapshot, key: &str, p: &[u8]) -> Result<()> {
+    if snapshot.support_tier() == SupportTier::ReadOnly {
+        return Err("当前设备处于只读模式，禁止写入配置".into());
+    }
+    let caps = snapshot.parsed_capabilities()?;
+    let record = Record::from_payload(p)?;
+    match key {
+        k if k.starts_with("macro_") => {
+            let slot = k[6..].parse::<u8>().map_err(|_| "无效槽位")?;
+            if !caps.active_slots().contains(&slot) {
+                return Err("无效或未启用的背键槽位".into());
+            }
+            snapshot.layout()?.validate(p)?;
+        }
+        "sticks" => {
+            if (caps.sticks & 0x03) == 0 {
+                return Err("设备不支持摇杆配置".into());
+            }
+            let orig = snapshot.record("sticks")?;
+            if orig.len() != 15 || p.len() != 15 || record.declared != 14 {
+                return Err("摇杆记录长度不匹配".into());
+            }
+        }
+        "triggers" => {
+            if (caps.triggers & 0x03) == 0 {
+                return Err("设备不支持扳机配置".into());
+            }
+            let orig = snapshot.record("triggers")?;
+            if orig.len() != 15 || p.len() != 15 || record.declared != 14 {
+                return Err("扳机记录长度不匹配".into());
+            }
+        }
+        "motors" => {
+            if caps.motors == 0 {
+                return Err("设备不支持振动配置".into());
+            }
+            let orig = snapshot.record("motors")?;
+            if orig.len() < 5 || p.len() != orig.len() {
+                return Err("马达记录长度不匹配".into());
+            }
+        }
+        "remapping" => {
+            if caps.changekey == 0 {
+                return Err("设备不支持标准按键改键".into());
+            }
+            let sources = snapshot.keys("remap_keys")?;
+            if record.declared != sources.len() {
+                return Err("标准映射长度与按键表不匹配".into());
+            }
+        }
+        "lighting" => {
+            if caps.lighting == 0 {
+                return Err("设备不支持灯光配置".into());
+            }
+            let orig = snapshot.record("lighting")?;
+            if orig.len() < 7 || !(orig.len() - 1).is_multiple_of(6) || p.len() != orig.len() {
+                return Err("灯光记录长度不匹配".into());
+            }
+        }
+        _ => return Err("不允许写入该记录".into()),
+    }
+    Ok(())
 }
 
 pub fn validate_record(snapshot: &Snapshot, key: &str, p: &[u8]) -> Result<()> {
@@ -887,7 +951,9 @@ pub fn validate_record(snapshot: &Snapshot, key: &str, p: &[u8]) -> Result<()> {
             for side in 0..2u8 {
                 if caps.has_stick_side(side) {
                     let off = 1 + (side as usize) * 7;
-                    validate_curve_channel(&p[off..off + 7], STICK_MAX_PROGRESS)?;
+                    if p[off..off + 7] != orig[off..off + 7] {
+                        validate_curve_channel(&p[off..off + 7], STICK_MAX_PROGRESS)?;
+                    }
                 }
             }
         }
@@ -902,7 +968,9 @@ pub fn validate_record(snapshot: &Snapshot, key: &str, p: &[u8]) -> Result<()> {
             for side in 0..2u8 {
                 if caps.has_trigger_side(side) {
                     let off = 1 + (side as usize) * 7;
-                    validate_curve_channel(&p[off..off + 7], TRIGGER_MAX_PROGRESS)?;
+                    if p[off..off + 7] != orig[off..off + 7] {
+                        validate_curve_channel(&p[off..off + 7], TRIGGER_MAX_PROGRESS)?;
+                    }
                 }
             }
         }
@@ -1261,7 +1329,7 @@ pub fn diagnostic_bundle(snapshot: &Snapshot) -> Value {
     let caps = snapshot.parsed_capabilities().ok();
     json!({
         "format": "oplus-diagnostic-v1",
-        "app_version": "0.7.0",
+        "app_version": env!("CARGO_PKG_VERSION"),
         "address": snapshot.address,
         "support_tier": tier,
         "effective_generation": snapshot.identity.effective_generation(),

@@ -139,6 +139,7 @@ export async function identifyRearSlotsWeb(
   onStatus: (msg: string) => void,
   readInputs: () => Input[] = readWebGamepads,
   pollIntervalMs = 12,
+  expectedDeviceId?: string,
 ): Promise<Record<number, string>> {
   const initialPads = readInputs();
   if (initialPads.length === 0) {
@@ -186,7 +187,13 @@ export async function identifyRearSlotsWeb(
   });
 
   const total = activeSlots.length;
-  const [journal] = await prepare(device, store, "identification", edits);
+  const [journal] = await prepare(
+    device,
+    store,
+    "identification",
+    edits,
+    expectedDeviceId ? { expectedDeviceId } : undefined,
+  );
 
   let sampleError: unknown = null;
   const labels: Record<number, string> = {};

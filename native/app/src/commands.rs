@@ -240,7 +240,7 @@ pub fn initial(state: tauri::State<'_, State>) -> Value {
     json!({
         "address": address,
         "recoveries": tx::pending(&root),
-        "version": "0.7.0",
+        "version": env!("CARGO_PKG_VERSION"),
         "keymap": state.0.macro_runner.store(),
         "runner": state.0.macro_runner.snapshot(),
     })
@@ -295,8 +295,8 @@ pub async fn keymap_import(state: tauri::State<'_, State>) -> Result<Value> {
         .await
         .ok_or("已取消导入")?;
     let meta = std::fs::metadata(path.path()).map_err(|e| e.to_string())?;
-    if meta.len() > 256 * 1024 {
-        return Err("键盘宏配置文件超过 256 KiB".into());
+    if meta.len() > keymap::MAX_KEYMAP_BYTES as u64 {
+        return Err("键盘宏配置文件超过 8 MiB".into());
     }
     let data = std::fs::read(path.path()).map_err(|e| e.to_string())?;
     let imported = keymap::import_keymap_profile(&data)?;

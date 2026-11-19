@@ -2,7 +2,7 @@
 //! even if no acknowledgement arrived. Every attempted record is restored.
 use crate::{
     Result,
-    model::{Snapshot, SupportTier, normalize_payload_for, validate_record},
+    model::{Snapshot, SupportTier, normalize_payload_for, validate_record, validate_restore_record},
     protocol::Identity,
     storage,
 };
@@ -78,8 +78,25 @@ pub fn normalize_against(key: &str, readback: Vec<u8>, reference: &[u8]) -> Vec<
     readback
 }
 
+pub const MAX_BACKUP_BYTES: usize = 128 * 1024;
+const VALID_KINDS: [&str; 5] = ["save", "undo", "identification", "recovery", "validation"];
+
 pub fn boundary(snapshot: &Snapshot, key: &str, original: &[u8], target: &[u8]) -> Result<()> {
-    validate_record(snapshot, key, target)?;
+    boundary_for_kind(snapshot, "save", key, original, target)
+}
+
+pub fn boundary_for_kind(
+    snapshot: &Snapshot,
+    kind: &str,
+    key: &str,
+    original: &[u8],
+    target: &[u8],
+) -> Result<()> {
+    if matches!(kind, "undo" | "recovery") {
+        validate_restore_record(snapshot, key, target)?;
+    } else {
+        validate_record(snapshot, key, target)?;
+    }
     if key.starts_with("macro_") && (original == [0] || target == [0]) {
         return Err("空背键记录的写入与恢复尚未验证".into());
     }
@@ -158,6 +175,9 @@ pub async fn prepare(
     kind: &str,
     edits: Vec<Edit>,
 ) -> Result<(Journal, Snapshot)> {
+    if !VALID_KINDS.contains(&kind) {
+        return Err("未知事务类型".into());
+    }
     let snapshot = device.snapshot().await?;
     if snapshot.support_tier() == SupportTier::ReadOnly {
         return Err("当前设备处于只读诊断模式，禁止写入配置".into());
@@ -178,7 +198,8 @@ pub async fn prepare(
         if original != expected {
             return Err(format!("{} 已被其他软件修改，请重新读取后比较", e.key));
         }
-        boundary(&snapshot, &e.key, &original, &target)?;
+        boundary_for_kind(&snapshot, kind, &e.key, &original, &target)?;
+        boundary_for_kind(&snapshot, "undo", &e.key, &target, &original)?;
         if original != target {
             records.push(Entry {
                 key: e.key,
@@ -192,12 +213,14 @@ pub async fn prepare(
     if records.is_empty() {
         return Err("没有需要保存的更改".into());
     }
-    if !["save", "undo", "identification", "recovery", "validation"].contains(&kind) {
-        return Err("未知事务类型".into());
-    }
     let id = storage::id();
     let backup = format!("backups/rust-{id}.json");
-    let data = serde_json::to_vec_pretty(&snapshot).map_err(|e| e.to_string())?;
+    let mut backup_snapshot = snapshot.clone();
+    backup_snapshot.extra.remove("trace");
+    let data = serde_json::to_vec_pretty(&backup_snapshot).map_err(|e| e.to_string())?;
+    if data.len() > MAX_BACKUP_BYTES {
+        return Err("备份过大".into());
+    }
     storage::atomic(&root.join(&backup), &data)?;
     let j = Journal {
         schema: 1,
@@ -212,6 +235,7 @@ pub async fn prepare(
         errors: vec![],
     };
     j.persist(root)?;
+    validate_journal(root, &j)?;
     Ok((j, snapshot))
 }
 
@@ -392,6 +416,7 @@ pub fn pending(root: &Path) -> Vec<Journal> {
 
 pub fn validate_journal(root: &Path, j: &Journal) -> Result<Snapshot> {
     if j.schema != 1
+        || !VALID_KINDS.contains(&j.kind.as_str())
         || j.identity.effective_generation() != 2
         || j.id.is_empty()
         || !j.id.chars().all(|c| c.is_ascii_digit() || c == '-')
@@ -403,7 +428,7 @@ pub fn validate_journal(root: &Path, j: &Journal) -> Result<Snapshot> {
         return Err("日志备份路径无效".into());
     }
     let path = root.join(&j.backup);
-    if std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > 128 * 1024 {
+    if std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > MAX_BACKUP_BYTES as u64 {
         return Err("备份过大".into());
     }
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
@@ -427,7 +452,7 @@ pub fn validate_journal(root: &Path, j: &Journal) -> Result<Snapshot> {
         if !seen.insert(&e.key) || orig_norm != e.original {
             return Err("日志原始记录不匹配".into());
         }
-        boundary(&snapshot, &e.key, &e.original, &e.target)?;
+        boundary_for_kind(&snapshot, &j.kind, &e.key, &e.original, &e.target)?;
     }
     Ok(snapshot)
 }

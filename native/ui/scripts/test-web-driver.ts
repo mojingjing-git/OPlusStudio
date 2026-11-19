@@ -11,8 +11,9 @@ import {
   evaluateCurveY,
   matchCurvePreset,
   matchTriggerGear,
+  projectCurvePreview,
 } from "../src/curves.ts";
-import type { Change, Input, Snapshot } from "../src/types.ts";
+import { APP_VERSION, type Change, type Input, type Snapshot } from "../src/types.ts";
 import {
   NOTIFY,
   SERVICE,
@@ -23,6 +24,8 @@ import {
   type WebBluetoothRemoteGATTServer,
   type WebBluetoothRemoteGATTService,
   WebBleSession,
+  formatWebDeviceAddress,
+  setCachedWebDeviceForTest,
 } from "../src/web/ble.ts";
 import {
   gamepadToXInput,
@@ -1278,5 +1281,446 @@ describe("5. v0.7.0 Stick & Trigger Curves, Capability Side Gate & Fritsch-Carls
         assert.ok(y >= 0 && y <= 255);
       }
     }
+  });
+});
+
+describe("6. v0.7.1 Audit Regressions: Wrong-Device Guard, Durable IDB, Cross-Tab Lock, Legacy Undo, BLE Timeout & WCAG", () => {
+  function stickEdit(snapshot: Snapshot, inner: number): Edit {
+    const expected = [...snapshotRecord(snapshot, "sticks")];
+    const target = desiredSetting(snapshot, "sticks", {
+      side: 0,
+      inner,
+      outer_raw: 8,
+      point1: [85, 85],
+      point2: [170, 170],
+      invert_x: false,
+      invert_y: false,
+      swap: false,
+    });
+    return { key: "sticks", expected, target };
+  }
+
+  function stickSetting(inner: number) {
+    return {
+      feature: "stick_curve" as const,
+      side: 0,
+      inner,
+      outer_raw: 8,
+      point1: [85, 85] as [number, number],
+      point2: [170, 170] as [number, number],
+      invert_x: false,
+      invert_y: false,
+      swap: false,
+    };
+  }
+
+  function fakePad(bt?: { id: string; name?: string }) {
+    const state = cloneSnapshotFixture();
+    if (bt) {
+      state.address = formatWebDeviceAddress(bt as WebBluetoothDevice);
+    }
+    const writes: { key: string; payload: number[] }[] = [];
+    return {
+      state,
+      writes,
+      address: state.address,
+      snapshot: async () => structuredClone(state),
+      read: async (key: string) => [...snapshotRecord(state, key)],
+      write: async (key: string, payload: readonly number[]) => {
+        writes.push({ key, payload: [...payload] });
+        state.raw[key] = recordFromPayload(payload);
+      },
+      close: async () => {},
+    };
+  }
+
+  it("restores legacy out-of-editor-range curves cleanly across save, undo, and crash recovery", async () => {
+    const dev = fakePad();
+    const legacy = [...snapshotRecord(dev.state, "sticks")];
+    legacy[1] = 92; // inner=92, outer_raw=8 -> sum 100
+    legacy[3] = 0; // P1.x == 0
+    dev.state.raw.sticks = recordFromPayload(legacy);
+    assert.equal(supportTier(dev.state), "verified");
+
+    const store = createMemoryStorage();
+    const receipt = await execute(dev, store, "save", [stickEdit(dev.state, 6)]);
+    assert.equal(receipt.journal.state, "completed");
+    assert.equal(snapshotRecord(dev.state, "sticks")[1], 6);
+
+    const undone = await execute(dev, store, "undo", undoEdits(receipt.journal));
+    assert.equal(undone.journal.state, "completed");
+    assert.deepEqual(snapshotRecord(dev.state, "sticks"), legacy);
+
+    // Crash recovery path also restores legacy original bytes!
+    const savedAgain = await execute(dev, store, "save", [stickEdit(dev.state, 8)]);
+    savedAgain.journal.state = "writing";
+    savedAgain.journal.records[0].attempted = true;
+    savedAgain.journal.records[0].state = "write_intent";
+    await persistJournal(store, savedAgain.journal);
+
+    const [journal] = await pending(store);
+    assert.ok(journal);
+    const recovery = await recoveryEdits(store, journal, dev.state);
+    assert.equal(recovery.length, 1);
+    const recovered = await execute(dev, store, "recovery", recovery);
+    assert.deepEqual(snapshotRecord(recovered.snapshot, "sticks"), legacy);
+  });
+
+  it("enforces fixed (0,0)/(255,255) spline endpoints and zero output inside deadzone", () => {
+    const dev = fakePad();
+    assert.throws(() =>
+      desiredSetting(dev.state, "sticks", {
+        ...stickSetting(6),
+        point1: [0, 170],
+        point2: [170, 220],
+      }),
+    );
+    assert.throws(() =>
+      desiredSetting(dev.state, "sticks", {
+        ...stickSetting(6),
+        point1: [85, 85],
+        point2: [255, 220],
+      }),
+    );
+    assert.throws(() =>
+      desiredSetting(dev.state, "sticks", {
+        ...stickSetting(6),
+        point1: [120, 90],
+        point2: [120, 180],
+      }),
+    );
+
+    // Even when rendering a legacy read-only curve with P1=(0,170), origin & deadzone output are strictly 0!
+    assert.equal(evaluateCurveY([0, 170], [170, 220], 0), 0);
+    assert.equal(evaluateCurveY([0, 170], [170, 220], 255), 255);
+    const pts = curveShape([0, 170], [170, 220], 33);
+    assert.deepEqual(pts[0], [0, 0]);
+    assert.deepEqual(pts[pts.length - 1], [255, 255]);
+
+    const centered = projectCurvePreview(0, 6, 8, 100, [0, 170], [170, 220]);
+    assert.equal(centered.outPct, 0);
+    assert.equal(centered.zoneLabel, "死区内");
+
+    const insideDz = projectCurvePreview(0.05, 6, 8, 100, [35, 200], [170, 240]);
+    assert.equal(insideDz.outPct, 0);
+    assert.equal(insideDz.zoneLabel, "死区内");
+
+    const fullTravel = projectCurvePreview(0.95, 6, 8, 100, [35, 200], [170, 240]);
+    assert.equal(fullTravel.outPct, 100);
+    assert.equal(fullTravel.zoneLabel, "满行程");
+  });
+
+  it("refuses to write to a different authorized controller when baseline controller disappears", async () => {
+    const a = { id: "fixture-A-001", name: "fixture A" };
+    const b = { id: "fixture-B-002", name: "fixture B" };
+    const padA = fakePad(a);
+    const padB = fakePad(b);
+    let permitted = [a];
+    const bluetooth = {
+      getDevices: async () => permitted,
+      requestDevice: async () => b,
+    };
+    Object.defineProperty(globalThis.navigator, "bluetooth", {
+      value: bluetooth,
+      configurable: true,
+    });
+    const realConnect = WebBleSession.connectDevice;
+    let failReadOfB = true;
+    (WebBleSession as any).connectDevice = async (device: unknown) => {
+      if (device === a) return padA;
+      if (failReadOfB) throw new Error("fixture B connection failed");
+      return padB;
+    };
+    try {
+      const { webInvoke } = await import("../src/web/runtime.ts?guard-wrong-device");
+      const view = await webInvoke("run", {
+        request: { action: "read", address: padA.address },
+      });
+      assert.equal(view.snapshot.address, padA.address);
+
+      permitted = [b];
+      await assert.rejects(
+        webInvoke("run", {
+          request: { action: "read", address: "", forcePicker: true },
+        }),
+        /fixture B connection failed/,
+      );
+      failReadOfB = false;
+
+      // Must reject saving A's draft onto B! Neither A nor B may receive writes!
+      await assert.rejects(
+        webInvoke("run", {
+          request: { action: "save", changes: {}, settings: [stickSetting(8)] },
+        }),
+        /未找到原目标手柄|不一致/,
+      );
+      assert.equal(padA.writes.length, 0);
+      assert.equal(padB.writes.length, 0);
+    } finally {
+      WebBleSession.connectDevice = realConnect;
+      setCachedWebDeviceForTest(null);
+      delete (globalThis.navigator as any).bluetooth;
+    }
+  });
+
+  it("blocks concurrent two-tab writes on the same controller via cross-tab device lock and conflict detection", async () => {
+    const bt = { id: "shared-pad-001", name: "shared pad" };
+    const dev = fakePad(bt);
+    const baseWrite = dev.write;
+    const slowDev = {
+      ...dev,
+      write: async (key: string, target: readonly number[]) => {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        await baseWrite(key, target);
+      },
+    };
+    const realConnect = WebBleSession.connectDevice;
+    (WebBleSession as any).connectDevice = async () => slowDev;
+    Object.defineProperty(globalThis.navigator, "bluetooth", {
+      value: { getDevices: async () => [bt], requestDevice: async () => bt },
+      configurable: true,
+    });
+    try {
+      const tabA = (await import("../src/web/runtime.ts?tab-lock-A")).webInvoke;
+      const tabB = (await import("../src/web/runtime.ts?tab-lock-B")).webInvoke;
+      await tabA("run", { request: { action: "read", address: dev.address } });
+      await tabB("run", { request: { action: "read", address: dev.address } });
+
+      const outcomes = await Promise.allSettled([
+        tabA("run", {
+          request: { action: "save", changes: {}, settings: [stickSetting(8)] },
+        }),
+        tabB("run", {
+          request: { action: "save", changes: {}, settings: [stickSetting(9)] },
+        }),
+      ]);
+      const fulfilled = outcomes.filter((o) => o.status === "fulfilled");
+      const rejected = outcomes.filter((o) => o.status === "rejected");
+      assert.equal(fulfilled.length, 1);
+      assert.equal(rejected.length, 1);
+      assert.equal(dev.writes.length, 1);
+      assert.equal(snapshotRecord(dev.state, "sticks")[1], 8);
+
+      // Even after Tab A releases the lock, Tab B's stale baseline (expected=6) is rejected by prepare()!
+      await assert.rejects(
+        tabB("run", {
+          request: { action: "save", changes: {}, settings: [stickSetting(9)] },
+        }),
+        /已被其他软件修改/,
+      );
+      assert.equal(dev.writes.length, 1);
+    } finally {
+      WebBleSession.connectDevice = realConnect;
+      setCachedWebDeviceForTest(null);
+      delete (globalThis.navigator as any).bluetooth;
+    }
+  });
+
+  it("blocks hardware writes when IndexedDB fails to open while still allowing read-only kv fallback", async () => {
+    (globalThis as any).indexedDB = {
+      open() {
+        const request: any = {};
+        queueMicrotask(() => {
+          request.error = new DOMException(
+            "Browser storage unavailable",
+            "SecurityError",
+          );
+          request.onerror?.();
+        });
+        return request;
+      },
+    };
+    try {
+      const { webStorage: deniedStorage } = await import(
+        "../src/web/storage.ts?denied-idb-v071"
+      );
+      // Ephemeral kv browsing works
+      await deniedStorage.put("kv", "theme-test", { ok: true });
+      assert.deepEqual(await deniedStorage.get("kv", "theme-test"), { ok: true });
+
+      // Hardware write MUST reject before touching the controller!
+      const dev = fakePad();
+      await assert.rejects(
+        execute(dev, deniedStorage, "save", [stickEdit(dev.state, 8)]),
+        /IndexedDB/,
+      );
+      assert.equal(dev.writes.length, 0);
+      assert.equal(snapshotRecord(dev.state, "sticks")[1], 6);
+    } finally {
+      delete (globalThis as any).indexedDB;
+    }
+  });
+
+  it("cleans up timed-out WebBLE request waiters so subsequent replies succeed", async () => {
+    let dropped = false;
+    const notifier = Object.assign(new EventTarget(), {
+      value: null as DataView | null,
+      startNotifications: async () => notifier,
+      stopNotifications: async () => notifier,
+    });
+    const writer = {
+      properties: { write: true },
+      async writeValueWithResponse(bytes: BufferSource) {
+        const buf =
+          bytes instanceof ArrayBuffer
+            ? new Uint8Array(bytes)
+            : new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        const request = parse(buf);
+        if (request.opcode === 0xb3 && !dropped) {
+          dropped = true;
+          return;
+        }
+        const payload =
+          request.opcode === 0x91
+            ? [7, 0x10, 5, 0x20, 1, 1, 0x37, 0x56]
+            : [0];
+        const reply = Uint8Array.from(
+          frame(0x19, payload, request.serial, 42, null),
+        );
+        notifier.value = new DataView(reply.buffer);
+        queueMicrotask(() =>
+          notifier.dispatchEvent(new Event("characteristicvaluechanged")),
+        );
+      },
+    };
+    const gatt = {
+      connected: false,
+      async connect() {
+        this.connected = true;
+        return this;
+      },
+      disconnect() {
+        this.connected = false;
+      },
+      async getPrimaryService() {
+        return {
+          async getCharacteristic(uuid: string) {
+            if (uuid === WRITE) return writer;
+            assert.equal(uuid, NOTIFY);
+            return notifier;
+          },
+        };
+      },
+    };
+    const session = await WebBleSession.connectDevice(
+      { id: "timeout-fixture", gatt } as unknown as WebBluetoothDevice,
+      { requestTimeoutMs: 40, chunkDelayMs: 0 },
+    );
+    try {
+      await assert.rejects(session.read("motors"), /响应超时/);
+      const remapping = await session.read("remapping");
+      assert.deepEqual(remapping, [0]);
+    } finally {
+      await session.close();
+    }
+  });
+
+  it("strips diagnostic trace from pre-write backups, accepts >256 KiB keymap imports, and meets WCAG 4.5:1 + version parity", async () => {
+    // 1. Oversized trace in snapshot.extra is stripped from backup so pending() succeeds
+    const dev = fakePad();
+    dev.state.extra = {
+      trace: Array.from({ length: 800 }, () => ({
+        direction: "rx",
+        opcode: 0x19,
+        serial: 0,
+        payload: "00".repeat(16),
+        wire: "00".repeat(20),
+      })),
+    };
+    const store = createMemoryStorage();
+    const [journal] = await prepare(dev, store, "save", [stickEdit(dev.state, 8)]);
+    journal.state = "writing";
+    journal.records[0].attempted = true;
+    await persistJournal(store, journal);
+    assert.equal((await pending(store)).length, 1);
+
+    // 2. 40-rule x 64-step KeymapStore (>256 KiB) imports cleanly
+    const bigStore = {
+      schema: 1,
+      active_profile_id: "default",
+      controller_slot: null,
+      trigger_threshold: 64,
+      stick_deadzone: 16000,
+      profiles: [
+        {
+          id: "default",
+          name: "大体积宏方案",
+          rules: Array.from({ length: 40 }, (_, idx) => ({
+            id: `rule-${idx}`,
+            name: `Macro ${idx}`,
+            enabled: false,
+            rear_slot: null,
+            trigger: ["A"],
+            action: {
+              kind: "macro",
+              steps: Array.from({ length: 64 }, () => ({
+                keys: ["A"],
+                hold_ms: 100,
+                gap_ms: 100,
+              })),
+              trigger_mode: "once",
+              loop_ms: 0,
+            },
+          })),
+        },
+      ],
+    };
+    const bigJson = JSON.stringify(bigStore, null, 2);
+    assert.ok(Buffer.byteLength(bigJson, "utf8") > 256 * 1024);
+    const importedBig = importKeymapAny(bigJson);
+    assert.equal(importedBig.rules.length, 40);
+
+    // 3. WCAG 2.2 AA (>= 4.5:1) contrast check on all --accent-fill-* stops vs #ffffff in style.css
+    const cssText = fs.readFileSync(
+      new URL("../src/style.css", import.meta.url),
+      "utf-8",
+    );
+    const relLum = (hex: string): number => {
+      const clean = hex.replace("#", "");
+      const vals = [0, 2, 4].map((i) => parseInt(clean.slice(i, i + 2), 16) / 255);
+      const [r, g, b] = vals.map((c) =>
+        c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4,
+      );
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const contrastWithWhite = (hex: string): number =>
+      1.05 / (relLum(hex) + 0.05);
+
+    const fillMatches = [
+      ...cssText.matchAll(
+        /--accent-fill-(?:top|bot|hover-top|hover-bot):\s*(#[0-9a-fA-F]{6})/g,
+      ),
+    ];
+    assert.ok(fillMatches.length >= 8);
+    for (const [, hex] of fillMatches) {
+      const ratio = contrastWithWhite(hex);
+      assert.ok(
+        ratio >= 4.5,
+        `Expected ${hex} contrast with #ffffff >= 4.5:1, got ${ratio.toFixed(2)}:1`,
+      );
+    }
+
+    // 4. Version parity across APP_VERSION, package.json, Cargo.toml, tauri.conf.json, windows.manifest
+    const uiPkg = JSON.parse(
+      fs.readFileSync(new URL("../package.json", import.meta.url), "utf-8"),
+    );
+    const tauriConf = JSON.parse(
+      fs.readFileSync(
+        new URL("../../app/tauri.conf.json", import.meta.url),
+        "utf-8",
+      ),
+    );
+    const cargoToml = fs.readFileSync(
+      new URL("../../Cargo.toml", import.meta.url),
+      "utf-8",
+    );
+    const winManifest = fs.readFileSync(
+      new URL("../../app/windows.manifest", import.meta.url),
+      "utf-8",
+    );
+    assert.equal(uiPkg.version, APP_VERSION);
+    assert.equal(tauriConf.version, APP_VERSION);
+    assert.match(cargoToml, new RegExp(`^version\\s*=\\s*"${APP_VERSION.replace(/\./g, "\\.")}"`, "m"));
+    assert.match(winManifest, new RegExp(`version="${APP_VERSION.replace(/\./g, "\\.")}\\.0"`));
   });
 });

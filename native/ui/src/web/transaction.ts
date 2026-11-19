@@ -7,7 +7,7 @@
 
 import type { Journal, Snapshot } from "../types.ts";
 import {
-  boundary,
+  boundaryForKind,
   bytesEqual,
   normalizeAgainst,
   normalizePayloadFor,
@@ -65,6 +65,8 @@ export interface Receipt {
   snapshot: Snapshot;
 }
 
+export const MAX_BACKUP_BYTES = 128 * 1024;
+
 const VALID_KINDS = new Set([
   "save",
   "undo",
@@ -115,8 +117,25 @@ export async function prepare(
   store: WebStorage,
   kind: string,
   edits: Edit[],
+  options?: { expectedDeviceId?: string },
 ): Promise<[DurableJournal, Snapshot]> {
+  if (!VALID_KINDS.has(kind)) {
+    throw new Error("未知事务类型");
+  }
+  await store.requireDurable?.();
+
   const snapshot = await device.snapshot();
+  if (options?.expectedDeviceId) {
+    if (
+      snapshot.device_id &&
+      snapshot.device_id !== options.expectedDeviceId
+    ) {
+      throw new Error("当前连接的蓝牙手柄与目标设备不一致，已停止写入");
+    }
+    if (!snapshot.device_id) {
+      snapshot.device_id = options.expectedDeviceId;
+    }
+  }
   if (supportTier(snapshot) === "read_only") {
     throw new Error("当前设备处于只读诊断模式，禁止写入配置");
   }
@@ -144,7 +163,8 @@ export async function prepare(
     if (!bytesEqual(original, expected)) {
       throw new Error(`${e.key} 已被其他软件修改，请重新读取后比较`);
     }
-    boundary(snapshot, e.key, original, target);
+    boundaryForKind(snapshot, kind, e.key, original, target);
+    boundaryForKind(snapshot, "undo", e.key, target, original);
     if (!bytesEqual(original, target)) {
       records.push({
         key: e.key,
@@ -159,14 +179,21 @@ export async function prepare(
   if (records.length === 0) {
     throw new Error("没有需要保存的更改");
   }
-  if (!VALID_KINDS.has(kind)) {
-    throw new Error("未知事务类型");
-  }
 
   const id = generateId();
   const backup = `backups/web-${id}.json`;
-  const backupText = JSON.stringify(snapshot, null, 2);
+  const backupSnapshot = structuredClone(snapshot);
+  if (backupSnapshot.extra) {
+    delete backupSnapshot.extra.trace;
+    if (Object.keys(backupSnapshot.extra).length === 0) {
+      delete backupSnapshot.extra;
+    }
+  }
+  const backupText = JSON.stringify(backupSnapshot, null, 2);
   const backupBytes = utf8Encode(backupText);
+  if (backupBytes.byteLength > MAX_BACKUP_BYTES) {
+    throw new Error("备份过大");
+  }
   await store.put("backups", backup, backupText);
   const backupSha256 = await sha256Hex(backupBytes);
 
@@ -175,6 +202,7 @@ export async function prepare(
     id,
     kind,
     address: snapshot.address,
+    ...(snapshot.device_id ? { device_id: snapshot.device_id } : {}),
     identity: normalizeIdentity(snapshot.identity),
     backup,
     backup_sha256: backupSha256,
@@ -183,6 +211,7 @@ export async function prepare(
     errors: [],
   };
   await persistJournal(store, journal);
+  await validateJournal(store, journal);
   return [journal, snapshot];
 }
 
@@ -301,8 +330,9 @@ export async function execute(
   store: WebStorage,
   kind: string,
   edits: Edit[],
+  options?: { expectedDeviceId?: string },
 ): Promise<Receipt> {
-  const [j, before] = await prepare(device, store, kind, edits);
+  const [j, before] = await prepare(device, store, kind, edits, options);
   try {
     await apply(device, store, j);
   } catch (e) {
@@ -319,6 +349,9 @@ export async function execute(
   let snapshot: Snapshot;
   try {
     snapshot = await device.snapshot();
+    if (options?.expectedDeviceId && !snapshot.device_id) {
+      snapshot.device_id = options.expectedDeviceId;
+    }
   } catch (e) {
     const nextRaw = { ...before.raw };
     for (const entry of j.records) {
@@ -354,6 +387,7 @@ export async function validateJournal(
   if (
     !j ||
     j.schema !== 1 ||
+    !VALID_KINDS.has(j.kind) ||
     !j.identity ||
     effectiveGeneration(normalizeIdentity(j.identity)) !== 2 ||
     typeof j.id !== "string" ||
@@ -377,7 +411,7 @@ export async function validateJournal(
     throw new Error("未找到备份文件");
   }
   const backupBytes = utf8Encode(backupText);
-  if (backupBytes.byteLength > 128 * 1024) {
+  if (backupBytes.byteLength > MAX_BACKUP_BYTES) {
     throw new Error("备份过大");
   }
   const actualHash = await sha256Hex(backupBytes);
@@ -394,6 +428,7 @@ export async function validateJournal(
 
   if (
     snapshot.address !== j.address ||
+    (j.device_id && snapshot.device_id && snapshot.device_id !== j.device_id) ||
     !sameIdentity(normalizeIdentity(snapshot.identity), normalizeIdentity(j.identity)) ||
     supportTier(snapshot) === "read_only"
   ) {
@@ -414,7 +449,7 @@ export async function validateJournal(
     if (!bytesEqual(origNorm, e.original)) {
       throw new Error("日志原始记录不匹配");
     }
-    boundary(snapshot, e.key, e.original, e.target);
+    boundaryForKind(snapshot, j.kind, e.key, e.original, e.target);
   }
   return snapshot;
 }
@@ -459,6 +494,7 @@ export async function recoveryEdits(
     supportTier(current) === "read_only" ||
     !sameIdentity(normalizeIdentity(current.identity), normalizeIdentity(j.identity)) ||
     current.address !== j.address ||
+    (j.device_id && current.device_id && current.device_id !== j.device_id) ||
     !capsMatch ||
     !arrayNumEqual(current.decoded?.macro_keys, backup.decoded?.macro_keys) ||
     !arrayNumEqual(current.decoded?.remap_keys, backup.decoded?.remap_keys)

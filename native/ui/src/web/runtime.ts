@@ -4,24 +4,27 @@
  * when running outside Tauri (e.g., GitHub Pages or browser dev preview).
  */
 
-import type {
-  Candidate,
-  Change,
-  KeymapStore,
-  PadButton,
-  RunnerSnapshot,
-  Snapshot,
-  View,
+import {
+  APP_VERSION,
+  type Candidate,
+  type Change,
+  type KeymapStore,
+  type PadButton,
+  type RunnerSnapshot,
+  type Snapshot,
+  type View,
 } from "../types.ts";
 import {
   WebBleSession,
   acquireWebBluetoothDevice,
   formatWebDeviceAddress,
   getCachedWebDeviceSummary,
+  rememberWebBluetoothDevice,
   withBeforeUnloadGuard,
 } from "./ble.ts";
 import { identifyRearSlotsWeb, readWebGamepads } from "./gamepad.ts";
 import {
+  MAX_KEYMAP_BYTES,
   bridgeHoldChange,
   capabilityActiveSlots,
   capabilityLightingZones,
@@ -55,7 +58,9 @@ import {
   downloadJson,
   labelStorageKey,
   pickJsonFile,
+  utf8Encode,
   webStorage,
+  withWebDeviceLock,
 } from "./storage.ts";
 import {
   type DurableJournal,
@@ -73,8 +78,11 @@ const statusListeners = new Set<StatusListener>();
 let busy = false;
 let cancelFlag = false;
 let baselineSnapshot: Snapshot | null = null;
+let baselineDeviceId: string | null = null;
 let undoJournal: DurableJournal | null = null;
 let keymapCache: KeymapStore | null = null;
+let keymapLoadError: string | null = null;
+let preserveCorruptKeymap = false;
 
 function emitStatus(text: string): void {
   for (const fn of statusListeners) {
@@ -105,6 +113,7 @@ function webRunnerSnapshot(): RunnerSnapshot {
     last_panic: false,
     blocked_count: 0,
     injection_warning: null,
+    load_error: keymapLoadError,
   };
 }
 
@@ -136,17 +145,55 @@ function slotForSnapshot(text: string, s: Snapshot): number {
 
 async function loadKeymapStore(): Promise<KeymapStore> {
   if (keymapCache) return keymapCache;
+  let raw: unknown;
   try {
-    const raw = await webStorage.get<unknown>("kv", "keymap-profiles");
-    if (raw) {
-      keymapCache = validateKeymapStore(raw);
-      return keymapCache;
-    }
+    raw = await webStorage.get<unknown>("kv", "keymap-profiles");
   } catch {
-    // Fallback to clean default store
+    raw = undefined;
+  }
+  if (raw !== undefined) {
+    try {
+      const clean = validateKeymapStore(raw);
+      const serialized = JSON.stringify(clean, null, 2);
+      if (utf8Encode(serialized).byteLength > MAX_KEYMAP_BYTES) {
+        throw new Error("键盘宏方案库体积超过 8 MiB 上限");
+      }
+      keymapCache = clean;
+      keymapLoadError = null;
+      preserveCorruptKeymap = false;
+      return keymapCache;
+    } catch (e) {
+      preserveCorruptKeymap = true;
+      keymapLoadError = `加载本地键盘宏方案失败（原数据已保留，未覆盖）：${
+        e instanceof Error ? e.message : String(e)
+      }`;
+    }
   }
   keymapCache = defaultKeymapStore();
   return keymapCache;
+}
+
+async function saveKeymapStoreChecked(rawStore: unknown): Promise<KeymapStore> {
+  const validated = validateKeymapStore(rawStore);
+  const serialized = JSON.stringify(validated, null, 2);
+  if (utf8Encode(serialized).byteLength > MAX_KEYMAP_BYTES) {
+    throw new Error("键盘宏方案库体积超过 8 MiB 上限，请精简规则或步骤");
+  }
+  if (preserveCorruptKeymap) {
+    const prev = await webStorage.get<unknown>("kv", "keymap-profiles");
+    if (prev !== undefined) {
+      await webStorage.put(
+        "kv",
+        `keymap-profiles-unloaded-${Date.now()}`,
+        prev,
+      );
+    }
+  }
+  await webStorage.put("kv", "keymap-profiles", validated);
+  preserveCorruptKeymap = false;
+  keymapLoadError = null;
+  keymapCache = validated;
+  return validated;
 }
 
 async function loadLabels(snapshot: Snapshot): Promise<Record<string, string>> {
@@ -277,6 +324,7 @@ async function buildView(snapshot: Snapshot): Promise<View> {
 async function installSnapshot(snapshot: Snapshot): Promise<View> {
   const v = await buildView(snapshot);
   baselineSnapshot = structuredClone(snapshot);
+  baselineDeviceId = snapshot.device_id || null;
   return v;
 }
 
@@ -360,205 +408,303 @@ async function dispatchRun(request: Record<string, any>): Promise<unknown> {
       deviceId?: string;
     }>("kv", "device");
 
-    const requestedAddr =
-      action === "read"
-        ? typeof request.address === "string"
-          ? request.address
-          : ""
-        : requireBaseline().address;
+    if (action === "read") {
+      const requestedAddr =
+        typeof request.address === "string" ? request.address.trim() : "";
+      const useSavedId =
+        !requestedAddr || requestedAddr === savedDeviceMeta?.address;
 
-    emitStatus(
-      request.forcePicker
-        ? "请在浏览器蓝牙窗口中选择手柄…"
-        : "正在连接手柄蓝牙配置通道…",
-    );
+      emitStatus(
+        request.forcePicker
+          ? "请在浏览器蓝牙窗口中选择手柄…"
+          : "正在连接手柄蓝牙配置通道…",
+      );
 
-    const btDevice = await acquireWebBluetoothDevice({
-      forcePicker: Boolean(request.forcePicker),
-      showAll: Boolean(request.showAll),
-      preferredAddress: requestedAddr || savedDeviceMeta?.address,
-      preferredDeviceId: savedDeviceMeta?.deviceId,
-    });
+      const btDevice = await acquireWebBluetoothDevice({
+        forcePicker: Boolean(request.forcePicker),
+        showAll: Boolean(request.showAll),
+        preferredAddress: requestedAddr || savedDeviceMeta?.address,
+        preferredDeviceId: useSavedId ? savedDeviceMeta?.deviceId : undefined,
+      });
 
-    const resolvedAddress = formatWebDeviceAddress(btDevice);
-    if (action === "save" || action === "undo" || action === "identify") {
-      const pend = await pending(webStorage);
-      if (pend.some((j) => j.address === resolvedAddress)) {
-        throw new Error("此设备存在未完成操作，请先在恢复中心检查并恢复");
-      }
+      const lockKey = btDevice.id || formatWebDeviceAddress(btDevice);
+      return withWebDeviceLock(lockKey, async () => {
+        emitStatus("正在建立蓝牙 GATT 服务连接…");
+        const device = await WebBleSession.connectDevice(btDevice);
+        try {
+          emitStatus("正在读取手柄能力描述符与板载配置…");
+          const s = await device.snapshot();
+          if (!s.device_id && btDevice.id) {
+            s.device_id = btDevice.id;
+          }
+          await rememberWebBluetoothDevice(btDevice);
+          if (
+            undoJournal &&
+            ((undoJournal.device_id &&
+              btDevice.id &&
+              undoJournal.device_id !== btDevice.id) ||
+              undoJournal.address !== s.address)
+          ) {
+            undoJournal = null;
+          }
+          await webStorage.put("kv", "device", {
+            address: s.address,
+            deviceId: btDevice.id,
+            deviceName: btDevice.name ?? "",
+          });
+          return await installSnapshot(s);
+        } finally {
+          await device.close();
+        }
+      });
     }
 
-    emitStatus("正在建立蓝牙 GATT 服务连接…");
-    const device = await WebBleSession.connectDevice(btDevice);
-    try {
-      if (action === "read") {
-        emitStatus("正在读取手柄能力描述符与板载配置…");
-        const s = await device.snapshot();
-        if (undoJournal && undoJournal.address !== s.address) {
-          undoJournal = null;
-        }
-        await webStorage.put("kv", "device", {
-          address: s.address,
-          deviceId: btDevice.id,
-          deviceName: btDevice.name ?? "",
+    if (action === "recovery_preview" || action === "recover") {
+      const pend = await pending(webStorage);
+      const j = pend.find((item) => item.id === request.id);
+      if (!j) {
+        throw new Error("未找到可恢复日志");
+      }
+      const lockKey = j.device_id || j.address;
+      return withWebDeviceLock(lockKey, async () => {
+        emitStatus("正在连接待恢复的目标手柄…");
+        const btDevice = await acquireWebBluetoothDevice({
+          preferredDeviceId: j.device_id,
+          preferredAddress: j.address,
+          requireExactDevice: true,
+          allowPickerForExactDevice: true,
         });
-        return await installSnapshot(s);
-      }
-
-      if (action === "save") {
-        const s = requireBaseline();
-        if (supportTier(s) === "read_only") {
-          throw new Error("当前设备处于只读模式，禁止保存到手柄");
+        if (j.device_id && btDevice.id !== j.device_id) {
+          throw new Error("所选手柄与待恢复记录不是同一台设备，已停止操作");
         }
-        const edits: Edit[] = [];
-        const changes = (request.changes ?? {}) as Record<string, Change>;
-        for (const [slotText, c] of Object.entries(changes)) {
-          const slot = slotForSnapshot(slotText, s);
-          const key = `macro_${slot}`;
-          edits.push({
-            key,
-            expected: snapshotRecord(s, key),
-            target: encodeForSlot(c, s, slot),
-          });
-        }
-
-        const settingTargets = new Map<string, number[]>();
-        const staged = structuredClone(s);
-        const settings = Array.isArray(request.settings) ? request.settings : [];
-        for (const setting of settings) {
-          let key: string;
-          let changePayload: Record<string, unknown>;
-          if (setting.feature === "stick_curve") {
-            key = "sticks";
-            changePayload = {
-              side: setting.side,
-              inner: setting.inner,
-              outer_raw: setting.outer_raw,
-              point1: setting.point1,
-              point2: setting.point2,
-              invert_x: setting.invert_x,
-              invert_y: setting.invert_y,
-              swap: setting.swap,
-            };
-          } else if (setting.feature === "trigger_curve") {
-            key = "triggers";
-            changePayload = {
-              side: setting.side,
-              inner: setting.inner,
-              outer_raw: setting.outer_raw,
-              point1: setting.point1,
-              point2: setting.point2,
-            };
-          } else if (setting.feature === "motors") {
-            key = "motors";
-            changePayload = { levels: setting.levels };
-          } else if (setting.feature === "motor_channel") {
-            key = "motors";
-            changePayload = {
-              channel: setting.channel,
-              level: setting.level,
-            };
-          } else if (setting.feature === "remapping") {
-            key = "remapping";
-            changePayload = {
-              source: setting.source,
-              target: setting.target,
-            };
-          } else if (setting.feature === "lighting") {
-            key = "lighting";
-            changePayload = {
-              zone: setting.zone,
-              rgb: setting.rgb,
-            };
-          } else {
-            throw new Error("未知设置");
+        emitStatus("正在建立蓝牙 GATT 服务连接…");
+        const device = await WebBleSession.connectDevice(btDevice);
+        try {
+          const current = await device.snapshot();
+          if (!current.device_id && btDevice.id) {
+            current.device_id = btDevice.id;
           }
-          const p = desiredSetting(staged, key, changePayload);
-          staged.raw[key] = recordFromPayload(p);
-          settingTargets.set(key, p);
+          const edits = await recoveryEdits(webStorage, j, current);
+          if (action === "recovery_preview") {
+            return { recovery: j, edits, current };
+          }
+          const after =
+            edits.length === 0
+              ? current
+              : (
+                  await execute(device, webStorage, "recovery", edits, {
+                    expectedDeviceId: btDevice.id,
+                  })
+                ).snapshot;
+          if (!after.device_id && btDevice.id) {
+            after.device_id = btDevice.id;
+          }
+          for (const e of j.records) {
+            if (e.attempted) {
+              e.state = "restored";
+            }
+          }
+          j.state = "rolled_back";
+          await persistJournal(webStorage, j);
+          await rememberWebBluetoothDevice(btDevice);
+          return await installSnapshot(after);
+        } finally {
+          await device.close();
         }
+      });
+    }
 
-        for (const [key, target] of settingTargets.entries()) {
-          edits.push({
-            key,
-            expected: snapshotRecord(s, key),
-            target,
-          });
-        }
-
-        emitStatus("正在检查冲突、备份并保存；请等待核对完成…");
-        const receipt = await execute(device, webStorage, "save", edits);
-        undoJournal = receipt.journal;
-        return await installSnapshot(receipt.snapshot);
-      }
-
+    if (action === "save" || action === "undo" || action === "identify") {
+      const s = requireBaseline();
+      const targetDeviceId = baselineDeviceId || s.device_id || "";
       if (action === "undo") {
         if (!undoJournal) {
           throw new Error("没有可撤销的保存");
         }
-        if (undoJournal.address !== device.address) {
+        if (
+          (undoJournal.device_id &&
+            targetDeviceId &&
+            undoJournal.device_id !== targetDeviceId) ||
+          undoJournal.address !== s.address
+        ) {
           throw new Error("可撤销操作属于另一只手柄，请重新连接原设备");
         }
-        emitStatus("正在撤销并回读核对…");
-        const receipt = await execute(
-          device,
-          webStorage,
-          "undo",
-          undoEdits(undoJournal),
-        );
-        undoJournal = null;
-        return await installSnapshot(receipt.snapshot);
       }
 
-      if (action === "identify") {
-        const recognized = await identifyRearSlotsWeb(
-          device,
-          webStorage,
-          () => cancelFlag,
-          emitStatus,
-        );
-        const s = await device.snapshot();
-        await saveLabels(s, recognized);
-        return await installSnapshot(s);
-      }
-
-      if (action === "recovery_preview") {
-        const pend = await pending(webStorage);
-        const j = pend.find((item) => item.id === request.id);
-        if (!j) {
-          throw new Error("未找到可恢复日志");
+      const lockKey = targetDeviceId || s.address;
+      return withWebDeviceLock(lockKey, async () => {
+        emitStatus("正在连接手柄蓝牙配置通道…");
+        const btDevice = await acquireWebBluetoothDevice({
+          preferredDeviceId: targetDeviceId || undefined,
+          preferredAddress: s.address,
+          requireExactDevice: true,
+        });
+        const resolvedAddress = formatWebDeviceAddress(btDevice);
+        if (
+          (targetDeviceId && btDevice.id !== targetDeviceId) ||
+          resolvedAddress !== s.address
+        ) {
+          throw new Error(
+            "连接的蓝牙手柄与当前编辑的设备不一致，已停止写入以防写错设备",
+          );
         }
-        const current = await device.snapshot();
-        const edits = await recoveryEdits(webStorage, j, current);
-        return { recovery: j, edits, current };
-      }
 
-      if (action === "recover") {
         const pend = await pending(webStorage);
-        const j = pend.find((item) => item.id === request.id);
-        if (!j) {
-          throw new Error("未找到可恢复日志");
+        if (
+          pend.some((j) =>
+            j.device_id && btDevice.id
+              ? j.device_id === btDevice.id
+              : j.address === resolvedAddress,
+          )
+        ) {
+          throw new Error("此设备存在未完成操作，请先在恢复中心检查并恢复");
         }
-        const current = await device.snapshot();
-        const edits = await recoveryEdits(webStorage, j, current);
-        const after =
-          edits.length === 0
-            ? current
-            : (await execute(device, webStorage, "recovery", edits)).snapshot;
-        for (const e of j.records) {
-          if (e.attempted) {
-            e.state = "restored";
+
+        emitStatus("正在建立蓝牙 GATT 服务连接…");
+        const device = await WebBleSession.connectDevice(btDevice);
+        try {
+          if (action === "save") {
+            if (supportTier(s) === "read_only") {
+              throw new Error("当前设备处于只读模式，禁止保存到手柄");
+            }
+            const edits: Edit[] = [];
+            const changes = (request.changes ?? {}) as Record<string, Change>;
+            for (const [slotText, c] of Object.entries(changes)) {
+              const slot = slotForSnapshot(slotText, s);
+              const key = `macro_${slot}`;
+              edits.push({
+                key,
+                expected: snapshotRecord(s, key),
+                target: encodeForSlot(c, s, slot),
+              });
+            }
+
+            const settingTargets = new Map<string, number[]>();
+            const staged = structuredClone(s);
+            const settings = Array.isArray(request.settings)
+              ? request.settings
+              : [];
+            for (const setting of settings) {
+              let key: string;
+              let changePayload: Record<string, unknown>;
+              if (setting.feature === "stick_curve") {
+                key = "sticks";
+                changePayload = {
+                  side: setting.side,
+                  inner: setting.inner,
+                  outer_raw: setting.outer_raw,
+                  point1: setting.point1,
+                  point2: setting.point2,
+                  invert_x: setting.invert_x,
+                  invert_y: setting.invert_y,
+                  swap: setting.swap,
+                };
+              } else if (setting.feature === "trigger_curve") {
+                key = "triggers";
+                changePayload = {
+                  side: setting.side,
+                  inner: setting.inner,
+                  outer_raw: setting.outer_raw,
+                  point1: setting.point1,
+                  point2: setting.point2,
+                };
+              } else if (setting.feature === "motors") {
+                key = "motors";
+                changePayload = { levels: setting.levels };
+              } else if (setting.feature === "motor_channel") {
+                key = "motors";
+                changePayload = {
+                  channel: setting.channel,
+                  level: setting.level,
+                };
+              } else if (setting.feature === "remapping") {
+                key = "remapping";
+                changePayload = {
+                  source: setting.source,
+                  target: setting.target,
+                };
+              } else if (setting.feature === "lighting") {
+                key = "lighting";
+                changePayload = {
+                  zone: setting.zone,
+                  rgb: setting.rgb,
+                };
+              } else {
+                throw new Error("未知设置");
+              }
+              const p = desiredSetting(staged, key, changePayload);
+              staged.raw[key] = recordFromPayload(p);
+              settingTargets.set(key, p);
+            }
+
+            for (const [key, target] of settingTargets.entries()) {
+              edits.push({
+                key,
+                expected: snapshotRecord(s, key),
+                target,
+              });
+            }
+
+            emitStatus("正在检查冲突、备份并保存；请等待核对完成…");
+            const receipt = await execute(device, webStorage, "save", edits, {
+              expectedDeviceId: btDevice.id,
+            });
+            if (!receipt.snapshot.device_id && btDevice.id) {
+              receipt.snapshot.device_id = btDevice.id;
+            }
+            undoJournal = receipt.journal;
+            return await installSnapshot(receipt.snapshot);
           }
-        }
-        j.state = "rolled_back";
-        await persistJournal(webStorage, j);
-        return await installSnapshot(after);
-      }
 
-      throw new Error("无效操作");
-    } finally {
-      await device.close();
+          if (action === "undo") {
+            if (!undoJournal) {
+              throw new Error("没有可撤销的保存");
+            }
+            if (
+              (undoJournal.device_id &&
+                btDevice.id &&
+                undoJournal.device_id !== btDevice.id) ||
+              undoJournal.address !== device.address
+            ) {
+              throw new Error("可撤销操作属于另一只手柄，请重新连接原设备");
+            }
+            emitStatus("正在撤销并回读核对…");
+            const receipt = await execute(
+              device,
+              webStorage,
+              "undo",
+              undoEdits(undoJournal),
+              { expectedDeviceId: btDevice.id },
+            );
+            if (!receipt.snapshot.device_id && btDevice.id) {
+              receipt.snapshot.device_id = btDevice.id;
+            }
+            undoJournal = null;
+            return await installSnapshot(receipt.snapshot);
+          }
+
+          const recognized = await identifyRearSlotsWeb(
+            device,
+            webStorage,
+            () => cancelFlag,
+            emitStatus,
+            readWebGamepads,
+            12,
+            btDevice.id,
+          );
+          const afterIdentify = await device.snapshot();
+          if (!afterIdentify.device_id && btDevice.id) {
+            afterIdentify.device_id = btDevice.id;
+          }
+          await saveLabels(afterIdentify, recognized);
+          return await installSnapshot(afterIdentify);
+        } finally {
+          await device.close();
+        }
+      });
     }
+
+    throw new Error("无效操作");
   });
 }
 
@@ -575,7 +721,7 @@ export async function webInvoke<T = any>(
       return {
         address: cached?.address || savedDev?.address || "",
         recoveries,
-        version: "0.7.0",
+        version: APP_VERSION,
         keymap,
         runner: webRunnerSnapshot(),
       } as T;
@@ -585,8 +731,11 @@ export async function webInvoke<T = any>(
       return readWebGamepads() as T;
 
     case "runner_state":
-    case "keymap_dismiss_warning":
     case "keymap_set_recording":
+      return webRunnerSnapshot() as T;
+
+    case "keymap_dismiss_warning":
+      keymapLoadError = null;
       return webRunnerSnapshot() as T;
 
     case "keymap_set_enabled":
@@ -595,9 +744,7 @@ export async function webInvoke<T = any>(
       );
 
     case "keymap_save_store": {
-      const validated = validateKeymapStore(args?.store);
-      await webStorage.put("kv", "keymap-profiles", validated);
-      keymapCache = validated;
+      const validated = await saveKeymapStoreChecked(args?.store);
       return {
         keymap: validated,
         runner: webRunnerSnapshot(),
@@ -613,8 +760,8 @@ export async function webInvoke<T = any>(
 
     case "keymap_import": {
       const bytes = await pickJsonFile(
-        256 * 1024,
-        "键盘宏配置文件超过 256 KiB",
+        MAX_KEYMAP_BYTES,
+        "键盘宏配置文件超过 8 MiB",
       );
       const imported = importKeymapAny(bytes);
       const store = structuredClone(await loadKeymapStore());
@@ -623,9 +770,7 @@ export async function webInvoke<T = any>(
       }
       store.profiles.push(imported);
       store.active_profile_id = imported.id;
-      const saved = validateKeymapStore(store);
-      await webStorage.put("kv", "keymap-profiles", saved);
-      keymapCache = saved;
+      const saved = await saveKeymapStoreChecked(store);
       return {
         keymap: saved,
         runner: webRunnerSnapshot(),

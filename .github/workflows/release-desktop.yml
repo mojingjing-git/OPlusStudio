@@ -33,12 +33,39 @@ jobs:
 
       - name: Run Web + Rust test suites & build desktop executable
         shell: pwsh
-        run: ./native/build.ps1
-
-      - name: Package OPlusStudio-Windows-x64.zip
-        shell: pwsh
+        env:
+          GITHUB_REF_TYPE: ${{ github.ref_type }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
-          $stage = "releases/0.7.0/OPlusStudio"
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME.StartsWith('v')) {
+            ./native/build.ps1 -ExpectedTag $env:GITHUB_REF_NAME
+          } else {
+            ./native/build.ps1
+          }
+
+      - name: Verify staged binary version & package OPlusStudio-Windows-x64.zip
+        shell: pwsh
+        env:
+          GITHUB_REF_TYPE: ${{ github.ref_type }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          $cargoText = Get-Content -LiteralPath "native/Cargo.toml" -Raw
+          if ($cargoText -notmatch '(?m)^version\s*=\s*"(\d+\.\d+\.\d+)"') {
+            throw "Unable to parse workspace version from native/Cargo.toml"
+          }
+          $version = $Matches[1]
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag '$($env:GITHUB_REF_NAME)' does not match Cargo version 'v$version'"
+          }
+          $stage = "releases/$version/OPlusStudio"
+          $exePath = "$stage/OPlusStudio.Native.exe"
+          if (-not (Test-Path -LiteralPath $exePath)) {
+            throw "Missing staged binary at $exePath"
+          }
+          $verInfo = (Get-Item -LiteralPath $exePath).VersionInfo
+          if (-not $verInfo.ProductVersion.StartsWith($version) -or -not $verInfo.FileVersion.StartsWith($version)) {
+            throw "Binary VersionInfo mismatch: Product='$($verInfo.ProductVersion)' File='$($verInfo.FileVersion)' Expected='$version'"
+          }
           $zipPath = "OPlusStudio-Windows-x64.zip"
           if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
           Compress-Archive -Path `

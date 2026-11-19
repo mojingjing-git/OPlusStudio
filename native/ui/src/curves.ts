@@ -9,6 +9,8 @@ export const CHANNEL_SIZE = 7;
 export const STICK_MAX_PROGRESS = 100;
 export const TRIGGER_MAX_PROGRESS = 200;
 export const CURVE_AXIS_MAX = 255;
+export const CURVE_POINT_X_MIN = 1;
+export const CURVE_POINT_X_MAX = 254;
 
 export const FLAG_INVERT_X = 0x01;
 export const FLAG_INVERT_Y = 0x02;
@@ -253,21 +255,32 @@ function buildSplineKnots(
   point1: readonly [number, number],
   point2: readonly [number, number],
 ): { xs: number[]; ys: number[]; slopes: number[] } | null {
-  const rawKnots: [number, number][] = [
-    [0.0, 0.0],
-    [point1[0], point1[1]],
-    [point2[0], point2[1]],
-    [CURVE_AXIS_MAX, CURVE_AXIS_MAX],
-  ];
+  const interior: [number, number][] = [];
+  for (const [rx, ry] of [point1, point2]) {
+    if (!Number.isFinite(rx) || !Number.isFinite(ry)) continue;
+    const x = Math.max(0, Math.min(CURVE_AXIS_MAX, rx));
+    const y = Math.max(0, Math.min(CURVE_AXIS_MAX, ry));
+    // Fixed endpoints (0, 0) and (255, 255) are immutable and must never be overwritten.
+    if (x <= 1e-9 || x >= CURVE_AXIS_MAX - 1e-9) {
+      continue;
+    }
+    interior.push([x, y]);
+  }
+  interior.sort((a, b) => a[0] - b[0]);
 
-  const unique: [number, number][] = [];
-  for (const [x, y] of rawKnots) {
-    if (unique.length > 0 && Math.abs(unique[unique.length - 1][0] - x) < 1e-9) {
-      unique[unique.length - 1] = [x, y];
+  const unique: [number, number][] = [[0.0, 0.0]];
+  for (const [x, y] of interior) {
+    const prev = unique[unique.length - 1];
+    if (Math.abs(prev[0] - x) < 1e-9) {
+      if (unique.length > 1) {
+        unique[unique.length - 1] = [x, (prev[1] + y) / 2.0];
+      }
     } else {
       unique.push([x, y]);
     }
   }
+  unique.push([CURVE_AXIS_MAX, CURVE_AXIS_MAX]);
+
   if (unique.length < 2) return null;
 
   const xs = unique.map(([x]) => x);
@@ -281,13 +294,74 @@ export function evaluateCurveY(
   point2: readonly [number, number],
   x: number,
 ): number {
-  const clampedX = Math.max(0, Math.min(CURVE_AXIS_MAX, x));
+  if (!Number.isFinite(x) || x <= 0) return 0;
+  if (x >= CURVE_AXIS_MAX) return CURVE_AXIS_MAX;
   const prepared = buildSplineKnots(point1, point2);
   if (!prepared) {
-    return clampedX;
+    return x;
   }
-  const y = hermite(prepared.xs, prepared.ys, prepared.slopes, clampedX);
+  const y = hermite(prepared.xs, prepared.ys, prepared.slopes, x);
   return Math.max(0, Math.min(CURVE_AXIS_MAX, y));
+}
+
+export interface ProjectedCurvePreview {
+  clampedMag: number;
+  curveX: number;
+  curveY: number;
+  inPct: number;
+  outPct: number;
+  zoneLabel: "死区内" | "静止" | "满行程" | "曲线工作区";
+}
+
+/**
+ * Software draft estimation combining deadzone gating + monotone cubic spline.
+ * Returns strictly 0 output inside the inner deadzone (or at 0 rest) and 255 at full travel.
+ */
+export function projectCurvePreview(
+  liveMagnitude: number,
+  inner: number,
+  outerRaw: number,
+  maxProgress: number,
+  point1: readonly [number, number],
+  point2: readonly [number, number],
+): ProjectedCurvePreview {
+  const clampedMag = Number.isFinite(liveMagnitude)
+    ? Math.max(0, Math.min(1, liveMagnitude))
+    : 0;
+  const progress = clampedMag * maxProgress;
+  const outerThreshold = Math.max(inner + 1, maxProgress - outerRaw);
+
+  let curveX: number;
+  let curveY: number;
+  let zoneLabel: ProjectedCurvePreview["zoneLabel"];
+
+  if (inner > 0 && progress <= inner) {
+    curveX = 0;
+    curveY = 0;
+    zoneLabel = "死区内";
+  } else if (progress <= 0) {
+    curveX = 0;
+    curveY = 0;
+    zoneLabel = "静止";
+  } else if (progress >= outerThreshold) {
+    curveX = CURVE_AXIS_MAX;
+    curveY = CURVE_AXIS_MAX;
+    zoneLabel = "满行程";
+  } else {
+    const span = Math.max(1, outerThreshold - inner);
+    curveX = ((progress - inner) / span) * CURVE_AXIS_MAX;
+    curveY = evaluateCurveY(point1, point2, curveX);
+    zoneLabel = "曲线工作区";
+  }
+
+  return {
+    clampedMag,
+    curveX,
+    curveY,
+    inPct: Math.round(clampedMag * 100),
+    outPct: Math.round((curveY / CURVE_AXIS_MAX) * 100),
+    zoneLabel,
+  };
 }
 
 /**

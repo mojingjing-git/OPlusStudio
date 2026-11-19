@@ -82,6 +82,13 @@ pub fn save<T: Serialize>(path: &Path, value: &T) -> Result<()> {
         &serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?,
     )
 }
+pub fn save_bounded<T: Serialize>(path: &Path, value: &T, max: usize) -> Result<()> {
+    let bytes = serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?;
+    if bytes.len() > max {
+        return Err("文件超过大小限制".into());
+    }
+    atomic(path, &bytes)
+}
 pub fn read<T: DeserializeOwned>(path: &Path, max: usize) -> Result<T> {
     let meta = fs::metadata(path).map_err(|e| e.to_string())?;
     if meta.len() > max as u64 {

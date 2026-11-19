@@ -17,6 +17,7 @@ export interface WebStorage {
   delete(store: StoreName, key: string): Promise<void>;
   listKeys(store: StoreName): Promise<string[]>;
   listAll<T = unknown>(store: StoreName): Promise<{ key: string; value: T }[]>;
+  requireDurable?(): Promise<void>;
 }
 
 let idSequence = 0;
@@ -80,12 +81,39 @@ export function createMemoryStorage(): WebStorage {
       }
       return out;
     },
+    async requireDurable(): Promise<void> {
+      // Explicit memory storage for unit tests is treated as durable within test scope.
+    },
   };
 }
 
 function openIndexedDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = globalThis.indexedDB.open(DB_NAME, DB_VERSION);
+    if (
+      typeof globalThis.indexedDB === "undefined" ||
+      !globalThis.indexedDB ||
+      typeof globalThis.indexedDB.open !== "function"
+    ) {
+      reject(
+        new Error(
+          "浏览器本地持久化存储（IndexedDB）不可用，为保证崩溃可恢复，已禁止写入手柄板载配置",
+        ),
+      );
+      return;
+    }
+    let req: IDBOpenDBRequest;
+    try {
+      req = globalThis.indexedDB.open(DB_NAME, DB_VERSION);
+    } catch (e) {
+      reject(
+        new Error(
+          `浏览器本地持久化存储（IndexedDB）不可用，已禁止写入手柄板载配置：${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        ),
+      );
+      return;
+    }
     req.onupgradeneeded = () => {
       const db = req.result;
       for (const name of ["kv", "backups", "journals"] as const) {
@@ -96,33 +124,72 @@ function openIndexedDb(): Promise<IDBDatabase> {
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () =>
-      reject(new Error(req.error?.message || "无法打开浏览器本地数据库"));
+      reject(
+        new Error(
+          `浏览器本地持久化存储（IndexedDB）不可用，已禁止写入手柄板载配置：${
+            req.error?.message || "打开本地数据库被拒绝"
+          }`,
+        ),
+      );
+    req.onblocked = () =>
+      reject(new Error("浏览器本地数据库被其他页面阻塞，请关闭多余标签页后重试"));
   });
+}
+
+function requiresDurableIndexedDb(): boolean {
+  return (
+    typeof window !== "undefined" || typeof globalThis.indexedDB !== "undefined"
+  );
+}
+
+function isWriteIntentStore(store: StoreName): boolean {
+  return store === "backups" || store === "journals";
 }
 
 function createIndexedDbStorage(): WebStorage {
   let dbPromise: Promise<IDBDatabase> | null = null;
   const fallback = createMemoryStorage();
-  let useFallback = false;
 
-  const getDb = async (): Promise<IDBDatabase | null> => {
-    if (useFallback || typeof globalThis.indexedDB === "undefined") {
-      useFallback = true;
-      return null;
-    }
+  const openDbStrict = async (): Promise<IDBDatabase> => {
     if (!dbPromise) {
-      dbPromise = openIndexedDb().catch(() => {
-        useFallback = true;
-        return null as unknown as IDBDatabase;
+      dbPromise = openIndexedDb().catch((err) => {
+        dbPromise = null;
+        throw err instanceof Error ? err : new Error(String(err));
       });
     }
     return dbPromise;
   };
 
+  const getDbOptional = async (): Promise<IDBDatabase | null> => {
+    if (
+      typeof globalThis.indexedDB === "undefined" ||
+      !globalThis.indexedDB ||
+      typeof globalThis.indexedDB.open !== "function"
+    ) {
+      return null;
+    }
+    try {
+      return await openDbStrict();
+    } catch {
+      return null;
+    }
+  };
+
   return {
+    async requireDurable(): Promise<void> {
+      if (requiresDurableIndexedDb()) {
+        await openDbStrict();
+      }
+    },
+
     async get<T = unknown>(store: StoreName, key: string): Promise<T | undefined> {
-      const db = await getDb();
-      if (!db) return fallback.get<T>(store, key);
+      const db = await getDbOptional();
+      if (!db) {
+        if (isWriteIntentStore(store) && requiresDurableIndexedDb()) {
+          return undefined;
+        }
+        return fallback.get<T>(store, key);
+      }
       return new Promise((resolve, reject) => {
         const tx = db.transaction(store, "readonly");
         const req = tx.objectStore(store).get(key);
@@ -135,7 +202,10 @@ function createIndexedDbStorage(): WebStorage {
     },
 
     async put(store: StoreName, key: string, value: unknown): Promise<void> {
-      const db = await getDb();
+      const db =
+        isWriteIntentStore(store) && requiresDurableIndexedDb()
+          ? await openDbStrict()
+          : await getDbOptional();
       if (!db) return fallback.put(store, key, value);
       return new Promise((resolve, reject) => {
         const tx = db.transaction(store, "readwrite");
@@ -149,7 +219,10 @@ function createIndexedDbStorage(): WebStorage {
     },
 
     async delete(store: StoreName, key: string): Promise<void> {
-      const db = await getDb();
+      const db =
+        isWriteIntentStore(store) && requiresDurableIndexedDb()
+          ? await openDbStrict()
+          : await getDbOptional();
       if (!db) return fallback.delete(store, key);
       return new Promise((resolve, reject) => {
         const tx = db.transaction(store, "readwrite");
@@ -161,8 +234,13 @@ function createIndexedDbStorage(): WebStorage {
     },
 
     async listKeys(store: StoreName): Promise<string[]> {
-      const db = await getDb();
-      if (!db) return fallback.listKeys(store);
+      const db = await getDbOptional();
+      if (!db) {
+        if (isWriteIntentStore(store) && requiresDurableIndexedDb()) {
+          return [];
+        }
+        return fallback.listKeys(store);
+      }
       return new Promise((resolve, reject) => {
         const tx = db.transaction(store, "readonly");
         const req = tx.objectStore(store).getAllKeys();
@@ -175,8 +253,13 @@ function createIndexedDbStorage(): WebStorage {
     async listAll<T = unknown>(
       store: StoreName,
     ): Promise<{ key: string; value: T }[]> {
-      const db = await getDb();
-      if (!db) return fallback.listAll<T>(store);
+      const db = await getDbOptional();
+      if (!db) {
+        if (isWriteIntentStore(store) && requiresDurableIndexedDb()) {
+          return [];
+        }
+        return fallback.listAll<T>(store);
+      }
       return new Promise((resolve, reject) => {
         const tx = db.transaction(store, "readonly");
         const os = tx.objectStore(store);
@@ -202,6 +285,63 @@ function createIndexedDbStorage(): WebStorage {
 }
 
 export const webStorage: WebStorage = createIndexedDbStorage();
+
+const activeDeviceLocks = new Set<string>();
+
+/**
+ * Acquires a fail-fast cross-tab / cross-module exclusive lease for a specific controller ID.
+ * Uses W3C Web Locks API (`navigator.locks`) across browser tabs plus shared module tracking.
+ */
+export async function withWebDeviceLock<T>(
+  deviceLockKey: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const normalized = (deviceLockKey || "default").trim() || "default";
+  const conflictMsg = "另一浏览器标签页正在操作该手柄，请等待完成后重新读取";
+
+  const runWithLocalSet = async (): Promise<T> => {
+    if (activeDeviceLocks.has(normalized)) {
+      throw new Error(conflictMsg);
+    }
+    activeDeviceLocks.add(normalized);
+    try {
+      return await fn();
+    } finally {
+      activeDeviceLocks.delete(normalized);
+    }
+  };
+
+  const navLocks = (
+    typeof navigator !== "undefined"
+      ? (
+          navigator as unknown as {
+            locks?: {
+              request?: <R>(
+                name: string,
+                options: { ifAvailable?: boolean; mode?: "exclusive" | "shared" },
+                callback: (lock: unknown | null) => Promise<R>,
+              ) => Promise<R>;
+            };
+          }
+        ).locks
+      : undefined
+  );
+
+  if (navLocks && typeof navLocks.request === "function") {
+    return navLocks.request(
+      `oplus-studio-device:${normalized}`,
+      { ifAvailable: true },
+      async (lock) => {
+        if (!lock) {
+          throw new Error(conflictMsg);
+        }
+        return runWithLocalSet();
+      },
+    );
+  }
+
+  return runWithLocalSet();
+}
 
 /**
  * Opens a browser JSON file picker (`<input type="file" accept=".json">`).

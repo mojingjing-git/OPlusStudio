@@ -1,6 +1,6 @@
 # O+ Studio 零安装网页驱动与 GitHub Pages 部署指南
 
-O+ Studio 0.7.0 支持**同源双形态发布**：同一套代码库既可构建为免安装 Windows 桌面版（`OPlusStudio.Native.exe`），也可直接托管到 **GitHub Pages** 作为纯前端零安装**网页驱动**运行，无任何后端服务器依赖，所有数据 100% 保存在用户本地浏览器（`IndexedDB`）与手柄闪存中。
+O+ Studio 0.7.1 支持**同源双形态发布**：同一套代码库既可构建为免安装 Windows 桌面版（`OPlusStudio.Native.exe`），也可直接托管到 **GitHub Pages** 作为纯前端零安装**网页驱动**运行，无任何后端服务器依赖，所有数据 100% 保存在用户本地浏览器（`IndexedDB`）与手柄闪存中。
 
 ---
 
@@ -53,14 +53,15 @@ git push -u origin main
 当你希望让网页端点击 **“下载 Windows 桌面版运行宏”** 按钮直接跳转到最新版桌面程序时，只需推送一个 `v*` 版本标签：
 
 ```powershell
-git tag v0.7.0
-git push origin v0.7.0
+git tag v0.7.1
+git push origin v0.7.1
 ```
 
 GitHub Actions 工作流 **Release Windows Desktop Edition**（`.github/workflows/release-desktop.yml`）会自动在云端 `windows-latest` 环境完成：
-1. 运行前端 Web 驱动测试套件（768 帧协议向量 + 42 项宏编码向量 + 事务回滚测试）；
-2. 运行 Rust 全工作区单元测试；
-3. 编译 `OPlusStudio.Native.exe` 并打包 `OPlusStudio-Windows-x64.zip` 自动发布到仓库的 **GitHub Releases**！
+1. 校验 Git 标签与 `Cargo.toml`、`tauri.conf.json`、`package.json`、`windows.manifest` 及成品 `.exe` 版本号严格一致；
+2. 运行前端 Web 驱动测试套件（768 帧协议向量 + 42 项宏编码向量 + 事务回滚与跨页互斥测试）；
+3. 运行 Rust 全工作区单元测试与集成测试；
+4. 编译 `OPlusStudio.Native.exe` 并打包 `OPlusStudio-Windows-x64.zip` 自动发布到仓库的 **GitHub Releases**！
 
 网页端会自动根据当前 `*.github.io/<repo>/` 域名（或构建期注入的仓库标识）定位到该仓库的 `releases/latest` 页面。
 
