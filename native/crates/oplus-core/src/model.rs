@@ -1,8 +1,30 @@
-use crate::{Result, protocol::Identity};
+use crate::{
+    Result,
+    protocol::{Identity, name_claims_oplus},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
+pub const VERIFIED_137_CAPS: [u8; 10] = [3, 3, 15, 0, 63, 1, 11, 0, 192, 0];
+pub const DEFAULT_OPLUS_ALL_KEYS: [u8; 23] = [
+    1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 13, 14, 15, 16, 17, 18, 19, 93, 94, 95, 96, 97, 104,
+];
+pub const DEFAULT_OPLUS_REMAP_KEYS: [u8; 16] = [
+    1, 2, 3, 4, 5, 6, 7, 8, 13, 14, 15, 16, 11, 12, 93, 94,
+];
+pub const DEFAULT_OPLUS_STICKS_BODY: [u8; 14] = [
+    6, 8, 85, 85, 170, 170, 0, 6, 8, 85, 85, 170, 170, 0,
+];
+pub const DEFAULT_OPLUS_TRIGGERS_BODY: [u8; 14] = [
+    4, 2, 85, 85, 170, 170, 0, 4, 2, 85, 85, 170, 170, 0,
+];
+pub const DEFAULT_OPLUS_MOTORS_BODY: [u8; 8] = [0xbf, 0xbf, 0x4c, 0x4c, 0x20, 0xbf, 0x02, 0x00];
+pub const DEFAULT_OPLUS_LIGHTING_BODY: [u8; 24] = [
+    255, 255, 255, 0, 0, 32, 0, 255, 0, 16, 0, 64, 0, 0, 255, 64, 128, 128, 128, 128, 128, 160,
+    128, 255,
+];
+pub const DEFAULT_OPLUS_MACRO_BODY: [u8; 7] = [0x00, 0x00, 0x88, 0x00, 0x00, 0x00, 0x00];
 pub const MACRO_KEYS: [u8; 18] = [
     18, 19, 13, 14, 15, 16, 1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 93, 94,
 ];
@@ -160,7 +182,136 @@ pub struct Snapshot {
     pub extra: BTreeMap<String, Value>,
 }
 impl Snapshot {
-    pub fn keys(&self, name: &str) -> Result<Vec<u8>> {
+    pub fn claims_oplus(&self) -> bool {
+        self.identity.is_oplus_id()
+            || name_claims_oplus(&self.address)
+            || self
+                .decoded
+                .get("device_name")
+                .and_then(Value::as_str)
+                .is_some_and(name_claims_oplus)
+    }
+    pub fn hydrate_oplus_defaults(&mut self) {
+        if !self.claims_oplus() {
+            return;
+        }
+        let valid_caps = Capabilities::parse(&self.capabilities).is_ok_and(|c| {
+            (c.sticks & 0x03) != 0
+                || (c.triggers & 0x03) != 0
+                || c.macros != 0
+                || c.motors != 0
+                || c.changekey != 0
+                || c.lighting != 0
+        });
+        if !valid_caps {
+            self.capabilities = Record::new(&VERIFIED_137_CAPS);
+        }
+        let caps = Capabilities::parse(&self.capabilities)
+            .unwrap_or_else(|_| Capabilities::parse(&Record::new(&VERIFIED_137_CAPS)).unwrap());
+        if !self.decoded.is_object() {
+            self.decoded = json!({});
+        }
+        if self.keys_raw("all_keys").map(|k| k.is_empty()).unwrap_or(true) {
+            self.decoded["all_keys"] = json!(DEFAULT_OPLUS_ALL_KEYS);
+        }
+        if caps.changekey != 0
+            && self
+                .keys_raw("remap_keys")
+                .map(|k| k.is_empty())
+                .unwrap_or(true)
+        {
+            self.decoded["remap_keys"] = json!(DEFAULT_OPLUS_REMAP_KEYS);
+        }
+        if caps.macros != 0
+            && self
+                .keys_raw("macro_keys")
+                .and_then(|mk| Layout::new(&mk))
+                .is_err()
+        {
+            self.decoded["macro_keys"] = json!(MACRO_KEYS);
+        }
+        if caps.sticks != 0
+            && self
+                .raw
+                .get("sticks")
+                .and_then(|r| r.payload().ok())
+                .is_none_or(|p| p.len() != 15)
+        {
+            self.raw
+                .insert("sticks".into(), Record::new(&DEFAULT_OPLUS_STICKS_BODY));
+        }
+        if caps.triggers != 0
+            && self
+                .raw
+                .get("triggers")
+                .and_then(|r| r.payload().ok())
+                .is_none_or(|p| p.len() != 15)
+        {
+            self.raw
+                .insert("triggers".into(), Record::new(&DEFAULT_OPLUS_TRIGGERS_BODY));
+        }
+        if caps.motors != 0
+            && self
+                .raw
+                .get("motors")
+                .and_then(|r| r.payload().ok())
+                .is_none_or(|p| p.len() < 5)
+        {
+            self.raw
+                .insert("motors".into(), Record::new(&DEFAULT_OPLUS_MOTORS_BODY));
+        }
+        if caps.changekey != 0 {
+            let rk_len = self
+                .keys("remap_keys")
+                .map(|k| k.len())
+                .unwrap_or(DEFAULT_OPLUS_REMAP_KEYS.len());
+            let valid_remap = self
+                .raw
+                .get("remapping")
+                .and_then(|r| r.payload().ok())
+                .is_some_and(|p| (p == [0]) || p.len() == rk_len + 1);
+            if !valid_remap {
+                self.raw
+                    .insert("remapping".into(), Record::new(&vec![0u8; rk_len]));
+            }
+        }
+        if caps.lighting != 0
+            && self
+                .raw
+                .get("lighting")
+                .and_then(|r| r.payload().ok())
+                .is_none_or(|p| p.len() < 7 || !(p.len() - 1).is_multiple_of(6))
+        {
+            self.raw
+                .insert("lighting".into(), Record::new(&DEFAULT_OPLUS_LIGHTING_BODY));
+        }
+        let neutral = self
+            .keys("macro_keys")
+            .and_then(|mk| Layout::new(&mk))
+            .map(|l| l.neutral)
+            .unwrap_or(0x88);
+        let default_macro = [
+            0x00,
+            0x00,
+            (neutral & 0xff) as u8,
+            ((neutral >> 8) & 0xff) as u8,
+            ((neutral >> 16) & 0xff) as u8,
+            0x00,
+            0x00,
+        ];
+        for slot in caps.active_slots() {
+            let key = format!("macro_{slot}");
+            if self
+                .raw
+                .get(&key)
+                .and_then(|r| r.payload().ok())
+                .is_none()
+            {
+                self.raw.insert(key, Record::new(&default_macro));
+            }
+        }
+    }
+    fn keys_raw(&self, name: &str) -> Result<Vec<u8>> {
         self.decoded
             .get(name)
             .and_then(Value::as_array)
@@ -174,8 +325,40 @@ impl Snapshot {
             })
             .collect()
     }
+    pub fn keys(&self, name: &str) -> Result<Vec<u8>> {
+        match self.keys_raw(name) {
+            Ok(v) if !v.is_empty() => Ok(v),
+            res => {
+                if self.claims_oplus() {
+                    match name {
+                        "all_keys" => return Ok(DEFAULT_OPLUS_ALL_KEYS.to_vec()),
+                        "remap_keys" | "remap_targets" => {
+                            return Ok(DEFAULT_OPLUS_REMAP_KEYS.to_vec());
+                        }
+                        "macro_keys" => return Ok(MACRO_KEYS.to_vec()),
+                        _ => {}
+                    }
+                }
+                res
+            }
+        }
+    }
     pub fn parsed_capabilities(&self) -> Result<Capabilities> {
-        Capabilities::parse(&self.capabilities)
+        match Capabilities::parse(&self.capabilities) {
+            Ok(c)
+                if !self.claims_oplus()
+                    || (c.sticks & 0x03) != 0
+                    || (c.triggers & 0x03) != 0
+                    || c.macros != 0
+                    || c.motors != 0
+                    || c.changekey != 0
+                    || c.lighting != 0 =>
+            {
+                Ok(c)
+            }
+            Err(e) if !self.claims_oplus() => Err(e),
+            _ => Capabilities::parse(&Record::new(&VERIFIED_137_CAPS)),
+        }
     }
     pub fn active_slots(&self) -> Vec<u8> {
         self.parsed_capabilities()
@@ -200,11 +383,11 @@ impl Snapshot {
             .map(|lim| (lim as usize).clamp(1, 47))
             .unwrap_or(42)
     }
-    pub fn support_tier(&self) -> SupportTier {
+    fn strict_support_tier(&self) -> SupportTier {
         if self.identity.effective_generation() != 2 {
             return SupportTier::ReadOnly;
         }
-        let Ok(caps) = self.parsed_capabilities() else {
+        let Ok(caps) = Capabilities::parse(&self.capabilities) else {
             return SupportTier::ReadOnly;
         };
         if (caps.sticks & 0x03) == 0
@@ -217,7 +400,7 @@ impl Snapshot {
             return SupportTier::ReadOnly;
         }
         if caps.sticks != 0 {
-            let Ok(st) = self.record("sticks") else {
+            let Ok(st) = self.raw.get("sticks").ok_or(()).and_then(|r| r.payload().map_err(|_| ())) else {
                 return SupportTier::ReadOnly;
             };
             if st.len() != 15 {
@@ -225,7 +408,7 @@ impl Snapshot {
             }
         }
         if caps.triggers != 0 {
-            let Ok(tr) = self.record("triggers") else {
+            let Ok(tr) = self.raw.get("triggers").ok_or(()).and_then(|r| r.payload().map_err(|_| ())) else {
                 return SupportTier::ReadOnly;
             };
             if tr.len() != 15 {
@@ -237,7 +420,7 @@ impl Snapshot {
             if slots.is_empty() {
                 return SupportTier::ReadOnly;
             }
-            let Ok(mk) = self.keys("macro_keys") else {
+            let Ok(mk) = self.keys_raw("macro_keys") else {
                 return SupportTier::ReadOnly;
             };
             let Ok(layout) = Layout::new(&mk) else {
@@ -253,7 +436,12 @@ impl Snapshot {
                 return SupportTier::ReadOnly;
             }
             for s in slots {
-                let Ok(rec) = self.record(&format!("macro_{s}")) else {
+                let Ok(rec) = self
+                    .raw
+                    .get(&format!("macro_{s}"))
+                    .ok_or(())
+                    .and_then(|r| r.payload().map_err(|_| ()))
+                else {
                     return SupportTier::ReadOnly;
                 };
                 if layout.validate(&rec).is_err() {
@@ -262,7 +450,7 @@ impl Snapshot {
             }
         }
         if caps.motors != 0 {
-            let Ok(m) = self.record("motors") else {
+            let Ok(m) = self.raw.get("motors").ok_or(()).and_then(|r| r.payload().map_err(|_| ())) else {
                 return SupportTier::ReadOnly;
             };
             if m.len() < 5 {
@@ -270,13 +458,23 @@ impl Snapshot {
             }
         }
         if caps.changekey != 0 {
-            let Ok(rk) = self.keys("remap_keys") else {
+            let Ok(rk) = self.keys_raw("remap_keys") else {
                 return SupportTier::ReadOnly;
             };
-            if rk.is_empty() || self.remap_targets().map(|t| t.is_empty()).unwrap_or(true) {
+            let targets_ok = if caps.has_remap_select_list() {
+                self.keys_raw("remap_targets").is_ok_and(|t| !t.is_empty())
+            } else {
+                !rk.is_empty()
+            };
+            if rk.is_empty() || !targets_ok {
                 return SupportTier::ReadOnly;
             }
-            let Ok(rem) = self.record("remapping") else {
+            let Ok(rem) = self
+                .raw
+                .get("remapping")
+                .ok_or(())
+                .and_then(|r| r.payload().map_err(|_| ()))
+            else {
                 return SupportTier::ReadOnly;
             };
             let norm = normalize_payload_for(self, "remapping", rem);
@@ -285,7 +483,7 @@ impl Snapshot {
             }
         }
         if caps.lighting != 0 {
-            let Ok(l) = self.record("lighting") else {
+            let Ok(l) = self.raw.get("lighting").ok_or(()).and_then(|r| r.payload().map_err(|_| ())) else {
                 return SupportTier::ReadOnly;
             };
             if l.len() < 7 || !(l.len() - 1).is_multiple_of(6) {
@@ -293,32 +491,110 @@ impl Snapshot {
             }
         }
         if self.identity.is_verified_137()
-            && self.keys("macro_keys").ok().as_deref() == Some(&MACRO_KEYS)
+            && self.keys_raw("macro_keys").ok().as_deref() == Some(&MACRO_KEYS)
             && self
                 .capabilities
                 .bytes()
-                .is_ok_and(|b| b == [3, 3, 15, 0, 63, 1, 11, 0, 192, 0])
+                .is_ok_and(|b| b == VERIFIED_137_CAPS)
         {
             SupportTier::Verified
         } else {
             SupportTier::Compatible
         }
     }
+    pub fn support_tier(&self) -> SupportTier {
+        let strict = self.strict_support_tier();
+        if strict != SupportTier::ReadOnly {
+            return strict;
+        }
+        if self.claims_oplus() {
+            if self.identity.is_verified_137() {
+                return SupportTier::Verified;
+            }
+            return SupportTier::Compatible;
+        }
+        SupportTier::ReadOnly
+    }
     pub fn layout(&self) -> Result<Layout> {
         if self.support_tier() == SupportTier::ReadOnly {
             return Err("当前设备处于只读模式，不支持编辑宏布局".into());
         }
-        Layout::new(&self.keys("macro_keys")?)
+        match self.keys("macro_keys").and_then(|mk| Layout::new(&mk)) {
+            Ok(l) => Ok(l),
+            Err(_) if self.claims_oplus() => Layout::new(&MACRO_KEYS),
+            Err(e) => Err(e),
+        }
     }
     pub fn record(&self, key: &str) -> Result<Vec<u8>> {
-        self.raw
-            .get(key)
-            .ok_or_else(|| format!("缺少 {key} 记录"))?
-            .payload()
+        if let Some(rec) = self.raw.get(key) {
+            if let Ok(p) = rec.payload() {
+                if !self.claims_oplus() {
+                    return Ok(p);
+                }
+                let valid = match key {
+                    "sticks" | "triggers" => p.len() == 15 && p[0] == 14,
+                    "motors" => p.len() >= 5,
+                    "lighting" => p.len() >= 7 && (p.len() - 1).is_multiple_of(6),
+                    "remapping" => {
+                        let rk_len = self
+                            .keys("remap_keys")
+                            .map(|k| k.len())
+                            .unwrap_or(DEFAULT_OPLUS_REMAP_KEYS.len());
+                        p == [0] || p.len() == rk_len + 1
+                    }
+                    _ => true,
+                };
+                if valid {
+                    return Ok(p);
+                }
+            } else if !self.claims_oplus() {
+                return rec.payload();
+            }
+        }
+        if self.claims_oplus() {
+            match key {
+                "sticks" => return Record::new(&DEFAULT_OPLUS_STICKS_BODY).payload(),
+                "triggers" => return Record::new(&DEFAULT_OPLUS_TRIGGERS_BODY).payload(),
+                "motors" => return Record::new(&DEFAULT_OPLUS_MOTORS_BODY).payload(),
+                "remapping" => {
+                    let rk_len = self
+                        .keys("remap_keys")
+                        .map(|k| k.len())
+                        .unwrap_or(DEFAULT_OPLUS_REMAP_KEYS.len());
+                    return Record::new(&vec![0u8; rk_len]).payload();
+                }
+                "lighting" => return Record::new(&DEFAULT_OPLUS_LIGHTING_BODY).payload(),
+                k if k.starts_with("macro_") => {
+                    let slot_ok = k[6..].parse::<u8>().is_ok_and(|s| s < 8);
+                    if slot_ok {
+                        let neutral = self
+                            .keys("macro_keys")
+                            .and_then(|mk| Layout::new(&mk))
+                            .map(|l| l.neutral)
+                            .unwrap_or(0x88);
+                        return Record::new(&[
+                            0x00,
+                            0x00,
+                            (neutral & 0xff) as u8,
+                            ((neutral >> 8) & 0xff) as u8,
+                            ((neutral >> 16) & 0xff) as u8,
+                            0x00,
+                            0x00,
+                        ])
+                        .payload();
+                    }
+                }
+                _ => {}
+            }
+        }
+        Err(format!("缺少 {key} 记录"))
     }
     pub fn validate_rear(&self) -> Result<()> {
         if self.support_tier() == SupportTier::ReadOnly {
             return Err("当前设备处于只读模式".into());
+        }
+        if self.claims_oplus() {
+            return Ok(());
         }
         let caps = self.parsed_capabilities()?;
         if caps.macros == 0 {
@@ -335,7 +611,9 @@ impl Snapshot {
             return BTreeMap::new();
         }
         let slots = self.active_slots();
-        if self.identity.vid == "1005" && slots.as_slice() == [0, 1, 2, 3, 4, 5] {
+        if (self.identity.vid == "1005" || self.claims_oplus())
+            && slots.as_slice() == [0, 1, 2, 3, 4, 5]
+        {
             LABELS
                 .iter()
                 .enumerate()
@@ -787,7 +1065,15 @@ pub fn form(snapshot: &Snapshot, slot: u8) -> Result<Change> {
     }
     let layout = snapshot.layout()?;
     let p = snapshot.record(&format!("macro_{slot}"))?;
-    let program = Program::parse(&p, &layout)?;
+    let program = match Program::parse(&p, &layout) {
+        Ok(prog) => prog,
+        Err(_) if snapshot.claims_oplus() => {
+            return Ok(Change::Record {
+                payload: hex_spaced(&p),
+            });
+        }
+        Err(e) => return Err(e),
+    };
     if program.steps.len() == 1
         && program.steps[0].duration_ms == 0
         && program.loop_ms == 0
@@ -797,14 +1083,15 @@ pub fn form(snapshot: &Snapshot, slot: u8) -> Result<Change> {
             .values()
             .all(|s| ((program.steps[0].mask >> s) & 15) == 8)
     {
-        return Ok(Change::Hold {
-            keys: layout
-                .digital
-                .iter()
-                .filter(|(_, bit)| program.steps[0].mask & (1 << **bit) != 0)
-                .map(|(k, _)| *k)
-                .collect(),
-        });
+        let keys: Vec<u8> = layout
+            .digital
+            .iter()
+            .filter(|(_, bit)| program.steps[0].mask & (1 << **bit) != 0)
+            .map(|(k, _)| *k)
+            .collect();
+        if !keys.is_empty() {
+            return Ok(Change::Hold { keys });
+        }
     }
     if program.steps.is_empty() {
         return Ok(Change::Record {
@@ -871,7 +1158,17 @@ pub fn validate_restore_record(snapshot: &Snapshot, key: &str, p: &[u8]) -> Resu
             if !caps.active_slots().contains(&slot) {
                 return Err("无效或未启用的背键槽位".into());
             }
-            snapshot.layout()?.validate(p)?;
+            if snapshot.claims_oplus() {
+                if p != [0]
+                    && (!(8..=238).contains(&p.len())
+                        || p[0] as usize != p.len() - 1
+                        || !(p.len() - 3).is_multiple_of(5))
+                {
+                    return Err("宏记录结构无效".into());
+                }
+            } else {
+                snapshot.layout()?.validate(p)?;
+            }
         }
         "sticks" => {
             if (caps.sticks & 0x03) == 0 {
@@ -1254,7 +1551,7 @@ pub fn import_profile(data: &[u8], snapshot: &Snapshot) -> Result<BTreeMap<u8, C
     }
     let identity: Identity =
         serde_json::from_value(v["identity"].clone()).map_err(|_| "缺少设备身份")?;
-    if identity.effective_generation() != 2 {
+    if identity.effective_generation() != 2 && !identity.is_oplus_id() && !snapshot.claims_oplus() {
         return Err("导入配置非第二代协议格式".into());
     }
     let src_macro_keys: Vec<u8> = v["macro_keys"]

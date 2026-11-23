@@ -190,6 +190,9 @@ impl Identity {
             && self.mode == 6
             && self.generation == 2
     }
+    pub fn is_oplus_id(&self) -> bool {
+        self.vid.eq_ignore_ascii_case("1005") && self.pid.eq_ignore_ascii_case("2001")
+    }
     pub fn verified(&self) -> bool {
         self.is_verified_137()
     }
@@ -216,6 +219,13 @@ impl Identity {
             sensor,
         })
     }
+}
+
+pub fn name_claims_oplus(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    ["o+", "oplus", "o plus", "致动o", "zd o"]
+        .iter()
+        .any(|needle| lower.contains(needle))
 }
 
 pub fn decode_keys(data: &[u8]) -> Result<Vec<u8>> {

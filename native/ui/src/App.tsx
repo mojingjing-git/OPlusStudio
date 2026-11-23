@@ -40,6 +40,7 @@ import {
   FileSpreadsheet,
 } from "lucide-react";
 import CurvesPage from "./CurvesPage";
+import InputTesterPage from "./InputTesterPage";
 import KeymapPage from "./KeymapPage";
 import {
   APP_VERSION,
@@ -499,7 +500,8 @@ export default function App() {
     [runnerSnapshot, setRunnerSnapshot] =
       useState<RunnerSnapshot>(defaultRunner),
     [keymapModalOpen, setKeymapModalOpen] = useState(false),
-    [previewSlot, setPreviewSlot] = useState<number | null>(null);
+    [previewSlot, setPreviewSlot] = useState<number | null>(null),
+    [onlineSlot, setOnlineSlot] = useState<number | null>(null);
 
   const [theme, setTheme] = useState(localStorage.getItem("theme") || "light"),
     [scale, setScale] = useState(localStorage.getItem("scale") || "100");
@@ -596,27 +598,94 @@ export default function App() {
     };
   }, []);
 
+  // Poll macro runner state gently only in Tauri desktop, updating React state only on actual change
   useEffect(() => {
+    if (!isTauri) return;
     let alive = true;
-    const poll = () => {
-      invoke<Input[]>("inputs")
-        .then((v) => {
-          if (alive) setInput(v);
-        })
-        .catch(() => {});
+    let lastJson = "";
+    const pollRunner = () => {
       invoke<RunnerSnapshot>("runner_state")
         .then((r) => {
-          if (alive) setRunnerSnapshot(r);
+          if (!alive) return;
+          const nextJson = JSON.stringify(r);
+          if (nextJson !== lastJson) {
+            lastJson = nextJson;
+            setRunnerSnapshot(r);
+          }
         })
         .catch(() => {});
     };
-    poll();
-    const timer = setInterval(poll, 80);
+    pollRunner();
+    const timer = setInterval(pollRunner, 400);
     return () => {
       alive = false;
       clearInterval(timer);
     };
-  }, []);
+  }, [isTauri]);
+
+  // Poll inputs into React state ONLY when KeymapPage is open, quantized to threshold crossings so analog stick movement never causes re-render storms
+  useEffect(() => {
+    if (page !== "keymap") return;
+    let alive = true;
+    let lastSig = "";
+    const trigThresh = keymapStore.trigger_threshold || 64;
+    const stickDz = keymapStore.stick_deadzone || 16000;
+    const quantize = (list: Input[]) =>
+      list
+        .map(
+          (p) =>
+            `${p.slot}:${p.buttons}:${p.left_trigger >= trigThresh ? 1 : 0}:${p.right_trigger >= trigThresh ? 1 : 0}:${Math.abs(p.lx) >= stickDz ? Math.sign(p.lx) : 0}:${Math.abs(p.ly) >= stickDz ? Math.sign(p.ly) : 0}:${Math.abs(p.rx) >= stickDz ? Math.sign(p.rx) : 0}:${Math.abs(p.ry) >= stickDz ? Math.sign(p.ry) : 0}`,
+        )
+        .join("|");
+
+    const pollKeymapInputs = () => {
+      invoke<Input[]>("inputs")
+        .then((v) => {
+          if (!alive) return;
+          const sig = quantize(v);
+          if (sig !== lastSig) {
+            lastSig = sig;
+            setInput(v);
+          }
+        })
+        .catch(() => {});
+    };
+    pollKeymapInputs();
+    const timer = setInterval(pollKeymapInputs, 75);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [page, keymapStore.trigger_threshold, keymapStore.stick_deadzone]);
+
+  // Lightweight online-slot presence check (updates React state ONLY on plug/unplug or slot switch, 0 re-renders during stick movement!)
+  useEffect(() => {
+    let alive = true;
+    const preferred = previewSlot ?? keymapStore.controller_slot ?? null;
+    const checkPresence = () => {
+      invoke<Input[]>("inputs")
+        .then((list) => {
+          if (!alive) return;
+          const hit =
+            (preferred !== null
+              ? list.find((p) => p.slot === preferred)
+              : undefined) || list[0];
+          const next = hit ? hit.slot : null;
+          setOnlineSlot((prev) => (prev === next ? prev : next));
+        })
+        .catch(() => {});
+    };
+    checkPresence();
+    const timer = setInterval(checkPresence, 600);
+    window.addEventListener("gamepadconnected", checkPresence);
+    window.addEventListener("gamepaddisconnected", checkPresence);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+      window.removeEventListener("gamepadconnected", checkPresence);
+      window.removeEventListener("gamepaddisconnected", checkPresence);
+    };
+  }, [previewSlot, keymapStore.controller_slot]);
 
   useEffect(() => {
     if (!view || view.support_tier === "read_only") return;
@@ -867,10 +936,6 @@ export default function App() {
   };
 
   const preferredSlot = previewSlot ?? keymapStore.controller_slot ?? null;
-  const pad =
-    (preferredSlot !== null
-      ? input.find((p) => p.slot === preferredSlot)
-      : undefined) || input[0];
   const program = preview || (view ? view.programs[selected] || empty : empty);
   const isClassicSixSlot =
     activeSlots.length === 6 && activeSlots.every((s, idx) => s === idx);
@@ -887,7 +952,10 @@ export default function App() {
       "调节板载左右摇杆内外死区、响应曲线、轴向反转与扳机行程档位。",
     ],
     settings: ["手柄设置", "按设备能力动态调整振动强度、标准按键与 RGB 灯区。"],
-    input: ["实时输入", "检查电脑收到的 XInput 游戏输入与摇杆状态。"],
+    input: [
+      "实时输入",
+      "满帧率测量左右摇杆圆度与松手漂移、扳机压感峰值、采样回报率与全按键留痕。",
+    ],
     tools: ["配置与工具", "管理配置文件、兼容诊断包、背键名称与恢复中心。"],
   };
 
@@ -907,29 +975,6 @@ export default function App() {
 
   return (
     <div className="app">
-      {/* Hidden SVG Refraction Filter for iOS 26 Liquid Glass Optical Lensing */}
-      <svg className="liquid-svg-defs" aria-hidden="true">
-        <defs>
-          <filter id="liquid-refract" x="-8%" y="-8%" width="116%" height="116%">
-            <feTurbulence
-              type="fractalNoise"
-              baseFrequency="0.014"
-              numOctaves="2"
-              seed="7"
-              result="noise"
-            />
-            <feGaussianBlur in="noise" stdDeviation="14" result="softNoise" />
-            <feDisplacementMap
-              in="SourceGraphic"
-              in2="softNoise"
-              scale="6"
-              xChannelSelector="R"
-              yChannelSelector="G"
-            />
-          </filter>
-        </defs>
-      </svg>
-
       {/* Luminous Ambient Wallpaper Mesh Behind Liquid Glass Surfaces */}
       <div className="ambient-canvas" aria-hidden="true">
         <span className="orb orb-1" />
@@ -1072,9 +1117,9 @@ export default function App() {
           <div className="page-intro">
             <p>{titles[page][1]}</p>
             <span className="input-state">
-              <span className={"dot " + (pad ? "online" : "")} />
-              {pad
-                ? `${isTauri ? "XInput" : "手柄"} 槽位 ${pad.slot + 1} 在线`
+              <span className={"dot " + (onlineSlot !== null ? "online" : "")} />
+              {onlineSlot !== null
+                ? `${isTauri ? "XInput" : "手柄"} 槽位 ${onlineSlot + 1} 在线`
                 : isTauri
                   ? "暂无 XInput 输入"
                   : "按手柄任意键唤醒输入"}
@@ -1467,8 +1512,6 @@ export default function App() {
             <CurvesPage
               view={view}
               settings={settings}
-              pad={pad}
-              inputs={input}
               selectedSlot={preferredSlot}
               onSelectSlot={setPreviewSlot}
               isTauri={isTauri}
@@ -1485,117 +1528,11 @@ export default function App() {
               busy={busy}
             />
           ) : page === "input" ? (
-            <section className="panel input-panel">
-              <div className="section-heading">
-                <h2>{isTauri ? "Windows 游戏输入" : "手柄实时输入"}</h2>
-                <div className="curve-card-badges">
-                  {input.length > 1 &&
-                    input.map((item) => (
-                      <button
-                        key={item.slot}
-                        type="button"
-                        className={
-                          pad?.slot === item.slot ? "secondary" : "text-button"
-                        }
-                        onClick={() => setPreviewSlot(item.slot)}
-                      >
-                        槽位 #{item.slot + 1}
-                      </button>
-                    ))}
-                  <span className="pill">
-                    {isTauri ? "XInput · 只读" : "Gamepad · 只读"}
-                  </span>
-                </div>
-              </div>
-              {!pad ? (
-                <div className="empty-small">
-                  <Gamepad2 size={48} />
-                  <h3>{isTauri ? "还没有 XInput 手柄" : "尚未检测到激活的手柄"}</h3>
-                  <p>
-                    {isTauri
-                      ? "使用 USB 数据线或 2.4G 接收器连接，并将手柄切到 XInput 模式。"
-                      : "使用 USB 数据线或 2.4G 接收器连接手柄（XInput 模式），然后按一下手柄任意按键即可在浏览器中唤醒实时检测。"}
-                  </p>
-                </div>
-              ) : (
-                <>
-                  <div className="input-buttons">
-                    {[
-                      [0x1000, "A"],
-                      [0x2000, "B"],
-                      [0x4000, "X"],
-                      [0x8000, "Y"],
-                      [0x100, "LB"],
-                      [0x200, "RB"],
-                      [0x40, "L3"],
-                      [0x80, "R3"],
-                      [0x20, "Back"],
-                      [0x10, "Start"],
-                      [1, "↑"],
-                      [2, "↓"],
-                      [4, "←"],
-                      [8, "→"],
-                    ].map(([bit, n]) => (
-                      <span
-                        key={n}
-                        className={pad.buttons & Number(bit) ? "pressed" : ""}
-                      >
-                        {n}
-                      </span>
-                    ))}
-                  </div>
-                  <div className="input-axes">
-                    {[
-                      ["左摇杆", pad.lx, pad.ly],
-                      ["右摇杆", pad.rx, pad.ry],
-                    ].map(([label, x, y]) => (
-                      <div key={label}>
-                        <div className="stick">
-                          <i
-                            style={{
-                              transform: `translate(${(Number(x) / 32768) * 60}px,${(-Number(y) / 32768) * 60}px)`,
-                            }}
-                          />
-                        </div>
-                        <h3>{label}</h3>
-                        <code>
-                          X {x} · Y {y}
-                        </code>
-                      </div>
-                    ))}
-                    <div className="triggers">
-                      {[
-                        ["LT", pad.left_trigger],
-                        ["RT", pad.right_trigger],
-                      ].map(([l, v]) => (
-                        <div className="trigger-row" key={l}>
-                          <span className="trigger-name">{l}</span>
-                          <div
-                            className="trigger-track"
-                            role="meter"
-                            aria-label={`${l} 扳机行程`}
-                            aria-valuemin={0}
-                            aria-valuemax={255}
-                            aria-valuenow={Number(v)}
-                          >
-                            <div
-                              className="trigger-fill"
-                              style={{
-                                width: `${Math.round((Number(v) / 255) * 100)}%`,
-                              }}
-                            />
-                          </div>
-                          <code>{v}</code>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </>
-              )}
-              <p className="hint">
-                这里显示电脑实际收到的 XInput 输入；如需映射电脑键鼠，请切换至左侧“键盘宏映射”。
-              </p>
-            </section>
+            <InputTesterPage
+              isTauri={isTauri}
+              selectedSlot={preferredSlot}
+              onSelectSlot={setPreviewSlot}
+            />
           ) : (
             <div className="tools-layout">
               <section className="panel">

@@ -36,7 +36,9 @@ import {
   type Identity,
   effectiveGeneration,
   fromHex,
+  isOPlusIdentity,
   isVerified137,
+  nameClaimsOPlus,
   normalizeIdentity,
   toHex,
 } from "./protocol.ts";
@@ -45,8 +47,34 @@ export const MACRO_KEYS: readonly number[] = [
   18, 19, 13, 14, 15, 16, 1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 93, 94,
 ];
 
-const VERIFIED_137_CAPS: readonly number[] = [
+export const VERIFIED_137_CAPS: readonly number[] = [
   3, 3, 15, 0, 63, 1, 11, 0, 192, 0,
+];
+
+export const DEFAULT_OPLUS_ALL_KEYS: readonly number[] = [
+  1, 2, 3, 4, 5, 6, 7, 8, 11, 12, 13, 14, 15, 16, 17, 18, 19, 93, 94, 95, 96,
+  97, 104,
+];
+
+export const DEFAULT_OPLUS_REMAP_KEYS: readonly number[] = [
+  1, 2, 3, 4, 5, 6, 7, 8, 13, 14, 15, 16, 11, 12, 93, 94,
+];
+
+const DEFAULT_OPLUS_STICKS_BODY: readonly number[] = [
+  6, 8, 85, 85, 170, 170, 0, 6, 8, 85, 85, 170, 170, 0,
+];
+
+const DEFAULT_OPLUS_TRIGGERS_BODY: readonly number[] = [
+  4, 2, 85, 85, 170, 170, 0, 4, 2, 85, 85, 170, 170, 0,
+];
+
+const DEFAULT_OPLUS_MOTORS_BODY: readonly number[] = [
+  0xbf, 0xbf, 0x4c, 0x4c, 0x20, 0xbf, 0x02, 0x00,
+];
+
+const DEFAULT_OPLUS_LIGHTING_BODY: readonly number[] = [
+  255, 255, 255, 0, 0, 32, 0, 255, 0, 16, 0, 64, 0, 0, 255, 64, 128, 128, 128,
+  128, 128, 160, 128, 255,
 ];
 
 const DIRECTIONS: readonly string[] = [
@@ -534,7 +562,19 @@ export function programSequence(prog: Program, layout: Layout): string {
   return groups.map(([k, h, g]) => `${k}:${h}/${g}`).join(", ");
 }
 
-export function snapshotKeys(snapshot: Snapshot, field: string): number[] {
+export function claimsOPlus(snapshot: Snapshot): boolean {
+  const devName =
+    typeof snapshot.decoded?.device_name === "string"
+      ? snapshot.decoded.device_name
+      : "";
+  return (
+    isOPlusIdentity(snapshot.identity) ||
+    nameClaimsOPlus(snapshot.address) ||
+    nameClaimsOPlus(devName)
+  );
+}
+
+function snapshotKeysRaw(snapshot: Snapshot, field: string): number[] {
   const arr = (snapshot.decoded as Record<string, unknown> | undefined)?.[field];
   if (!Array.isArray(arr)) {
     throw new Error(`缺少设备按键表 ${field}`);
@@ -547,24 +587,228 @@ export function snapshotKeys(snapshot: Snapshot, field: string): number[] {
   });
 }
 
+export function snapshotKeys(snapshot: Snapshot, field: string): number[] {
+  try {
+    const v = snapshotKeysRaw(snapshot, field);
+    if (v.length > 0) return v;
+  } catch (e) {
+    if (!claimsOPlus(snapshot)) throw e;
+  }
+  if (claimsOPlus(snapshot)) {
+    if (field === "all_keys") return [...DEFAULT_OPLUS_ALL_KEYS];
+    if (field === "remap_keys" || field === "remap_targets") {
+      return [...DEFAULT_OPLUS_REMAP_KEYS];
+    }
+    if (field === "macro_keys") return [...MACRO_KEYS];
+  }
+  return snapshotKeysRaw(snapshot, field);
+}
+
+export function snapshotCapabilities(snapshot: Snapshot): Capabilities {
+  try {
+    const c = parseCapabilities(snapshot.capabilities);
+    const hasAnyFeature =
+      (c.sticks & 0x03) !== 0 ||
+      (c.triggers & 0x03) !== 0 ||
+      c.macros !== 0 ||
+      c.motors !== 0 ||
+      c.changekey !== 0 ||
+      c.lighting !== 0;
+    if (!claimsOPlus(snapshot) || hasAnyFeature) {
+      return c;
+    }
+  } catch (e) {
+    if (!claimsOPlus(snapshot)) throw e;
+  }
+  return parseCapabilities(makeRecord(VERIFIED_137_CAPS));
+}
+
+export function hydrateOPlusDefaults(snapshot: Snapshot): Snapshot {
+  if (!claimsOPlus(snapshot)) return snapshot;
+  const caps = snapshotCapabilities(snapshot);
+  try {
+    const rawC = parseCapabilities(snapshot.capabilities);
+    const anyBit =
+      (rawC.sticks & 0x03) !== 0 ||
+      (rawC.triggers & 0x03) !== 0 ||
+      rawC.macros !== 0 ||
+      rawC.motors !== 0 ||
+      rawC.changekey !== 0 ||
+      rawC.lighting !== 0;
+    if (!anyBit) {
+      snapshot.capabilities = makeRecord(VERIFIED_137_CAPS);
+    }
+  } catch {
+    snapshot.capabilities = makeRecord(VERIFIED_137_CAPS);
+  }
+  if (!snapshot.decoded || typeof snapshot.decoded !== "object") {
+    snapshot.decoded = {};
+  }
+  if (!snapshot.raw || typeof snapshot.raw !== "object") {
+    snapshot.raw = {};
+  }
+  try {
+    if (snapshotKeysRaw(snapshot, "all_keys").length === 0) throw new Error();
+  } catch {
+    snapshot.decoded.all_keys = [...DEFAULT_OPLUS_ALL_KEYS];
+  }
+  if (caps.changekey !== 0) {
+    try {
+      if (snapshotKeysRaw(snapshot, "remap_keys").length === 0) throw new Error();
+    } catch {
+      snapshot.decoded.remap_keys = [...DEFAULT_OPLUS_REMAP_KEYS];
+    }
+  }
+  if (caps.macros !== 0) {
+    try {
+      new Layout(snapshotKeysRaw(snapshot, "macro_keys"));
+    } catch {
+      snapshot.decoded.macro_keys = [...MACRO_KEYS];
+    }
+  }
+  if (caps.sticks !== 0) {
+    let ok = false;
+    try {
+      ok = Boolean(snapshot.raw.sticks && recordPayload(snapshot.raw.sticks).length === 15);
+    } catch {
+      ok = false;
+    }
+    if (!ok) snapshot.raw.sticks = makeRecord(DEFAULT_OPLUS_STICKS_BODY);
+  }
+  if (caps.triggers !== 0) {
+    let ok = false;
+    try {
+      ok = Boolean(snapshot.raw.triggers && recordPayload(snapshot.raw.triggers).length === 15);
+    } catch {
+      ok = false;
+    }
+    if (!ok) snapshot.raw.triggers = makeRecord(DEFAULT_OPLUS_TRIGGERS_BODY);
+  }
+  if (caps.motors !== 0) {
+    let ok = false;
+    try {
+      ok = Boolean(snapshot.raw.motors && recordPayload(snapshot.raw.motors).length >= 5);
+    } catch {
+      ok = false;
+    }
+    if (!ok) snapshot.raw.motors = makeRecord(DEFAULT_OPLUS_MOTORS_BODY);
+  }
+  if (caps.changekey !== 0) {
+    const rkLen = snapshotKeys(snapshot, "remap_keys").length;
+    let ok = false;
+    try {
+      const p = snapshot.raw.remapping ? recordPayload(snapshot.raw.remapping) : null;
+      ok = Boolean(p && ((p.length === 1 && p[0] === 0) || p.length === rkLen + 1));
+    } catch {
+      ok = false;
+    }
+    if (!ok) snapshot.raw.remapping = makeRecord(new Array<number>(rkLen).fill(0));
+  }
+  if (caps.lighting !== 0) {
+    let ok = false;
+    try {
+      const p = snapshot.raw.lighting ? recordPayload(snapshot.raw.lighting) : null;
+      ok = Boolean(p && p.length >= 7 && (p.length - 1) % 6 === 0);
+    } catch {
+      ok = false;
+    }
+    if (!ok) snapshot.raw.lighting = makeRecord(DEFAULT_OPLUS_LIGHTING_BODY);
+  }
+  let neutral = 0x88;
+  try {
+    neutral = new Layout(snapshotKeys(snapshot, "macro_keys")).neutral;
+  } catch {
+    neutral = 0x88;
+  }
+  const defaultMacroBody = [
+    0x00,
+    0x00,
+    neutral & 0xff,
+    (neutral >>> 8) & 0xff,
+    (neutral >>> 16) & 0xff,
+    0x00,
+    0x00,
+  ];
+  for (const slot of capabilityActiveSlots(caps)) {
+    const key = `macro_${slot}`;
+    let ok = false;
+    try {
+      ok = Boolean(snapshot.raw[key] && recordPayload(snapshot.raw[key]).length >= 1);
+    } catch {
+      ok = false;
+    }
+    if (!ok) snapshot.raw[key] = makeRecord(defaultMacroBody);
+  }
+  return snapshot;
+}
+
 export function snapshotRecord(snapshot: Snapshot, key: string): number[] {
   const rec = snapshot.raw?.[key];
-  if (!rec) {
-    throw new Error(`缺少 ${key} 记录`);
+  const isOPlus = claimsOPlus(snapshot);
+  if (rec) {
+    try {
+      const p = recordPayload(rec);
+      if (!isOPlus) return p;
+      let valid = true;
+      if (key === "sticks" || key === "triggers") {
+        valid = p.length === 15 && (p[0] & 0xff) === 14;
+      } else if (key === "motors") {
+        valid = p.length >= 5;
+      } else if (key === "lighting") {
+        valid = p.length >= 7 && (p.length - 1) % 6 === 0;
+      } else if (key === "remapping") {
+        const rkLen = snapshotKeys(snapshot, "remap_keys").length;
+        valid = (p.length === 1 && p[0] === 0) || p.length === rkLen + 1;
+      }
+      if (valid) return p;
+    } catch (e) {
+      if (!isOPlus) throw e;
+    }
   }
-  return recordPayload(rec);
+  if (isOPlus) {
+    if (key === "sticks") return [14, ...DEFAULT_OPLUS_STICKS_BODY];
+    if (key === "triggers") return [14, ...DEFAULT_OPLUS_TRIGGERS_BODY];
+    if (key === "motors") return [8, ...DEFAULT_OPLUS_MOTORS_BODY];
+    if (key === "remapping") {
+      const rkLen = snapshotKeys(snapshot, "remap_keys").length;
+      return [rkLen & 0xff, ...new Array<number>(rkLen).fill(0)];
+    }
+    if (key === "lighting") return [24, ...DEFAULT_OPLUS_LIGHTING_BODY];
+    if (key.startsWith("macro_")) {
+      const slotStr = key.slice(6);
+      if (/^[0-9]+$/.test(slotStr) && Number(slotStr) < 8) {
+        let neutral = 0x88;
+        try {
+          neutral = new Layout(snapshotKeys(snapshot, "macro_keys")).neutral;
+        } catch {
+          neutral = 0x88;
+        }
+        return [
+          7,
+          0x00,
+          0x00,
+          neutral & 0xff,
+          (neutral >>> 8) & 0xff,
+          (neutral >>> 16) & 0xff,
+          0x00,
+          0x00,
+        ];
+      }
+    }
+  }
+  throw new Error(`缺少 ${key} 记录`);
 }
 
 export function snapshotActiveSlots(snapshot: Snapshot): number[] {
   try {
-    return capabilityActiveSlots(parseCapabilities(snapshot.capabilities));
+    return capabilityActiveSlots(snapshotCapabilities(snapshot));
   } catch {
     return [];
   }
 }
 
 export function snapshotRemapTargets(snapshot: Snapshot): number[] {
-  const caps = parseCapabilities(snapshot.capabilities);
+  const caps = snapshotCapabilities(snapshot);
   if (hasRemapSelectList(caps)) {
     return snapshotKeys(snapshot, "remap_targets");
   }
@@ -625,7 +869,7 @@ export function normalizeAgainst(
   return Array.from(readback);
 }
 
-export function supportTier(snapshot: Snapshot): SupportTier {
+function strictSupportTier(snapshot: Snapshot): SupportTier {
   if (effectiveGeneration(snapshot.identity) !== 2) {
     return "read_only";
   }
@@ -648,8 +892,8 @@ export function supportTier(snapshot: Snapshot): SupportTier {
 
   if (caps.sticks !== 0) {
     try {
-      const st = snapshotRecord(snapshot, "sticks");
-      if (st.length !== 15) return "read_only";
+      const rec = snapshot.raw?.sticks;
+      if (!rec || recordPayload(rec).length !== 15) return "read_only";
     } catch {
       return "read_only";
     }
@@ -657,8 +901,8 @@ export function supportTier(snapshot: Snapshot): SupportTier {
 
   if (caps.triggers !== 0) {
     try {
-      const tr = snapshotRecord(snapshot, "triggers");
-      if (tr.length !== 15) return "read_only";
+      const rec = snapshot.raw?.triggers;
+      if (!rec || recordPayload(rec).length !== 15) return "read_only";
     } catch {
       return "read_only";
     }
@@ -669,7 +913,7 @@ export function supportTier(snapshot: Snapshot): SupportTier {
     if (slots.length === 0) return "read_only";
     let layout: Layout;
     try {
-      const mk = snapshotKeys(snapshot, "macro_keys");
+      const mk = snapshotKeysRaw(snapshot, "macro_keys");
       layout = new Layout(mk);
     } catch {
       return "read_only";
@@ -682,8 +926,9 @@ export function supportTier(snapshot: Snapshot): SupportTier {
     }
     for (const s of slots) {
       try {
-        const rec = snapshotRecord(snapshot, `macro_${s}`);
-        layout.validate(rec);
+        const rec = snapshot.raw?.[`macro_${s}`];
+        if (!rec) return "read_only";
+        layout.validate(recordPayload(rec));
       } catch {
         return "read_only";
       }
@@ -692,8 +937,8 @@ export function supportTier(snapshot: Snapshot): SupportTier {
 
   if (caps.motors !== 0) {
     try {
-      const m = snapshotRecord(snapshot, "motors");
-      if (m.length < 5) return "read_only";
+      const rec = snapshot.raw?.motors;
+      if (!rec || recordPayload(rec).length < 5) return "read_only";
     } catch {
       return "read_only";
     }
@@ -701,11 +946,14 @@ export function supportTier(snapshot: Snapshot): SupportTier {
 
   if (caps.changekey !== 0) {
     try {
-      const rk = snapshotKeys(snapshot, "remap_keys");
-      const targets = snapshotRemapTargets(snapshot);
+      const rk = snapshotKeysRaw(snapshot, "remap_keys");
+      const targets = hasRemapSelectList(caps)
+        ? snapshotKeysRaw(snapshot, "remap_targets")
+        : rk;
       if (rk.length === 0 || targets.length === 0) return "read_only";
-      const rem = snapshotRecord(snapshot, "remapping");
-      const norm = normalizePayloadFor(snapshot, "remapping", rem);
+      const rec = snapshot.raw?.remapping;
+      if (!rec) return "read_only";
+      const norm = normalizePayloadFor(snapshot, "remapping", recordPayload(rec));
       if (norm.length !== rk.length + 1) return "read_only";
     } catch {
       return "read_only";
@@ -714,7 +962,9 @@ export function supportTier(snapshot: Snapshot): SupportTier {
 
   if (caps.lighting !== 0) {
     try {
-      const l = snapshotRecord(snapshot, "lighting");
+      const rec = snapshot.raw?.lighting;
+      if (!rec) return "read_only";
+      const l = recordPayload(rec);
       if (l.length < 7 || (l.length - 1) % 6 !== 0) return "read_only";
     } catch {
       return "read_only";
@@ -723,7 +973,7 @@ export function supportTier(snapshot: Snapshot): SupportTier {
 
   let mkMatchesVerified = false;
   try {
-    mkMatchesVerified = bytesEqual(snapshotKeys(snapshot, "macro_keys"), MACRO_KEYS);
+    mkMatchesVerified = bytesEqual(snapshotKeysRaw(snapshot, "macro_keys"), MACRO_KEYS);
   } catch {
     mkMatchesVerified = false;
   }
@@ -743,18 +993,39 @@ export function supportTier(snapshot: Snapshot): SupportTier {
   return "compatible";
 }
 
+export function supportTier(snapshot: Snapshot): SupportTier {
+  const strict = strictSupportTier(snapshot);
+  if (strict !== "read_only") {
+    return strict;
+  }
+  if (claimsOPlus(snapshot)) {
+    return isVerified137(snapshot.identity) ? "verified" : "compatible";
+  }
+  return "read_only";
+}
+
 export function snapshotLayout(snapshot: Snapshot): Layout {
   if (supportTier(snapshot) === "read_only") {
     throw new Error("当前设备处于只读模式，不支持编辑宏布局");
   }
-  return new Layout(snapshotKeys(snapshot, "macro_keys"));
+  try {
+    return new Layout(snapshotKeys(snapshot, "macro_keys"));
+  } catch (e) {
+    if (claimsOPlus(snapshot)) {
+      return new Layout(MACRO_KEYS);
+    }
+    throw e;
+  }
 }
 
 export function validateRear(snapshot: Snapshot): void {
   if (supportTier(snapshot) === "read_only") {
     throw new Error("当前设备处于只读模式");
   }
-  const caps = parseCapabilities(snapshot.capabilities);
+  if (claimsOPlus(snapshot)) {
+    return;
+  }
+  const caps = snapshotCapabilities(snapshot);
   if (caps.macros === 0) return;
   const spec = snapshotLayout(snapshot);
   for (const i of capabilityActiveSlots(caps)) {
@@ -769,7 +1040,7 @@ export function snapshotPreset(snapshot: Snapshot): Record<string, string> {
   const slots = snapshotActiveSlots(snapshot);
   const out: Record<string, string> = {};
   if (
-    snapshot.identity.vid === "1005" &&
+    (snapshot.identity.vid === "1005" || claimsOPlus(snapshot)) &&
     slots.length === 6 &&
     slots.every((v, idx) => v === idx)
   ) {
@@ -901,7 +1172,15 @@ export function form(snapshot: Snapshot, slot: number): Change {
   }
   const layout = snapshotLayout(snapshot);
   const p = snapshotRecord(snapshot, `macro_${slot}`);
-  const program = parseProgram(p, layout);
+  let program: Program;
+  try {
+    program = parseProgram(p, layout);
+  } catch (e) {
+    if (claimsOPlus(snapshot)) {
+      return { kind: "record", payload: hexSpaced(p) };
+    }
+    throw e;
+  }
 
   const sticksNeutral = Array.from(layout.analog.values()).every(
     (s) => ((program.steps[0]?.mask >>> s) & 15) === 8,
@@ -919,7 +1198,9 @@ export function form(snapshot: Snapshot, slot: number): Change {
         keys.push(k);
       }
     }
-    return { kind: "hold", keys };
+    if (keys.length > 0) {
+      return { kind: "hold", keys };
+    }
   }
   if (program.steps.length === 0) {
     return { kind: "record", payload: "00" };
@@ -983,7 +1264,7 @@ export function validateRestoreRecord(
   if (supportTier(snapshot) === "read_only") {
     throw new Error("当前设备处于只读模式，禁止写入配置");
   }
-  const caps = parseCapabilities(snapshot.capabilities);
+  const caps = snapshotCapabilities(snapshot);
   const record = recordFromPayload(p);
 
   if (key.startsWith("macro_")) {
@@ -995,7 +1276,19 @@ export function validateRestoreRecord(
     if (!capabilityActiveSlots(caps).includes(slot)) {
       throw new Error("无效或未启用的背键槽位");
     }
-    snapshotLayout(snapshot).validate(p);
+    if (claimsOPlus(snapshot)) {
+      if (
+        !(p.length === 1 && (p[0] & 0xff) === 0) &&
+        (p.length < 8 ||
+          p.length > 238 ||
+          (p[0] & 0xff) !== p.length - 1 ||
+          (p.length - 3) % 5 !== 0)
+      ) {
+        throw new Error("宏记录结构无效");
+      }
+    } else {
+      snapshotLayout(snapshot).validate(p);
+    }
     return;
   }
 
@@ -1069,7 +1362,7 @@ export function validateRecord(
   if (supportTier(snapshot) === "read_only") {
     throw new Error("当前设备处于只读模式，禁止写入配置");
   }
-  const caps = parseCapabilities(snapshot.capabilities);
+  const caps = snapshotCapabilities(snapshot);
   const record = recordFromPayload(p);
 
   if (key.startsWith("macro_")) {
@@ -1205,7 +1498,7 @@ export function boundaryForKind(
     throw new Error("空背键记录的写入与恢复尚未验证");
   }
   if (key === "sticks") {
-    const caps = parseCapabilities(snapshot.capabilities);
+    const caps = snapshotCapabilities(snapshot);
     if (
       original.length !== 15 ||
       target.length !== 15 ||
@@ -1230,7 +1523,7 @@ export function boundaryForKind(
     }
   }
   if (key === "triggers") {
-    const caps = parseCapabilities(snapshot.capabilities);
+    const caps = snapshotCapabilities(snapshot);
     if (
       original.length !== 15 ||
       target.length !== 15 ||
@@ -1255,7 +1548,7 @@ export function boundaryForKind(
     }
   }
   if (key === "motors") {
-    const caps = parseCapabilities(snapshot.capabilities);
+    const caps = snapshotCapabilities(snapshot);
     if (
       original.length < 5 ||
       target.length !== original.length ||
@@ -1273,7 +1566,7 @@ export function boundaryForKind(
     }
   }
   if (key === "lighting") {
-    const caps = parseCapabilities(snapshot.capabilities);
+    const caps = snapshotCapabilities(snapshot);
     if (
       original.length < 7 ||
       (original.length - 1) % 6 !== 0 ||
@@ -1311,7 +1604,7 @@ export function desiredSetting(
   if (supportTier(snapshot) === "read_only") {
     throw new Error("当前设备处于只读模式，禁止修改配置");
   }
-  const caps = parseCapabilities(snapshot.capabilities);
+  const caps = snapshotCapabilities(snapshot);
   const orig = normalizePayloadFor(
     snapshot,
     feature,
@@ -1630,7 +1923,11 @@ export function importProfile(
   }
 
   const identity: Identity = normalizeIdentity(v.identity);
-  if (effectiveGeneration(identity) !== 2) {
+  if (
+    effectiveGeneration(identity) !== 2 &&
+    !isOPlusIdentity(identity) &&
+    !claimsOPlus(snapshot)
+  ) {
     throw new Error("导入配置非第二代协议格式");
   }
   if (!Array.isArray(v.macro_keys)) {
@@ -1710,7 +2007,7 @@ export function diagnosticBundle(snapshot: Snapshot): Record<string, unknown> {
   const tier = supportTier(snapshot);
   let caps: Capabilities | null = null;
   try {
-    caps = parseCapabilities(snapshot.capabilities);
+    caps = snapshotCapabilities(snapshot);
   } catch {
     caps = null;
   }

@@ -41,12 +41,40 @@ pub struct Input {
 }
 
 #[cfg(windows)]
+static CONNECTED_MASK: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0x0F);
+#[cfg(windows)]
+static LAST_FULL_PROBE_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(windows)]
+fn monotonic_ms() -> u64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64
+}
+
+#[cfg(windows)]
 pub fn inputs() -> Vec<Input> {
+    use std::sync::atomic::Ordering;
     use windows_sys::Win32::UI::Input::XboxController::*;
-    let mut out = vec![];
-    for slot in 0..4 {
+
+    let now = monotonic_ms();
+    let last = LAST_FULL_PROBE_MS.load(Ordering::Relaxed);
+    let known = CONNECTED_MASK.load(Ordering::Relaxed);
+    // Avoid Windows XInputGetState ~2-8ms SetupAPI stall on disconnected slots by re-probing dead slots every 750ms
+    let probe_dead = known == 0 || now.saturating_sub(last) >= 750;
+    if probe_dead {
+        LAST_FULL_PROBE_MS.store(now, Ordering::Relaxed);
+    }
+
+    let mut next_mask = known;
+    let mut out = Vec::with_capacity(4);
+    for slot in 0..4u32 {
+        let bit = 1u8 << slot;
+        if !probe_dead && (known & bit) == 0 {
+            continue;
+        }
         let mut state: XINPUT_STATE = unsafe { std::mem::zeroed() };
         if unsafe { XInputGetState(slot, &mut state) } == 0 {
+            next_mask |= bit;
             let g = state.Gamepad;
             out.push(Input {
                 slot,
@@ -58,8 +86,11 @@ pub fn inputs() -> Vec<Input> {
                 rx: g.sThumbRX,
                 ry: g.sThumbRY,
             });
+        } else {
+            next_mask &= !bit;
         }
     }
+    CONNECTED_MASK.store(next_mask, Ordering::Relaxed);
     out
 }
 
@@ -70,6 +101,7 @@ pub fn inputs() -> Vec<Input> {
 
 #[cfg(windows)]
 pub fn read_pad_slot(preferred: Option<u8>) -> Option<(u32, PadState)> {
+    use std::sync::atomic::Ordering;
     use windows_sys::Win32::UI::Input::XboxController::*;
     let slots: &[u32] = match preferred {
         Some(0) => &[0],
@@ -78,9 +110,22 @@ pub fn read_pad_slot(preferred: Option<u8>) -> Option<(u32, PadState)> {
         Some(3) => &[3],
         _ => &[0, 1, 2, 3],
     };
+    let now = monotonic_ms();
+    let last = LAST_FULL_PROBE_MS.load(Ordering::Relaxed);
+    let known = CONNECTED_MASK.load(Ordering::Relaxed);
+    let probe_dead = known == 0 || now.saturating_sub(last) >= 750;
+    if probe_dead {
+        LAST_FULL_PROBE_MS.store(now, Ordering::Relaxed);
+    }
+
     for &slot in slots {
+        let bit = 1u8 << slot;
+        if !probe_dead && (known & bit) == 0 {
+            continue;
+        }
         let mut state: XINPUT_STATE = unsafe { std::mem::zeroed() };
         if unsafe { XInputGetState(slot, &mut state) } == 0 {
+            CONNECTED_MASK.fetch_or(bit, Ordering::Relaxed);
             let g = state.Gamepad;
             return Some((
                 slot,
@@ -94,6 +139,8 @@ pub fn read_pad_slot(preferred: Option<u8>) -> Option<(u32, PadState)> {
                     ry: g.sThumbRY,
                 },
             ));
+        } else {
+            CONNECTED_MASK.fetch_and(!bit, Ordering::Relaxed);
         }
     }
     None

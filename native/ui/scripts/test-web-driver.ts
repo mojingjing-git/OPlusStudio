@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { describe, it } from "node:test";
 
 import { inferDesktopReleaseUrl } from "../src/backend.ts";
+import { PollingRateAnalyzer, StickBenchAnalyzer } from "../src/liveInput.ts";
 import {
   CURVE_PRESETS,
   TRIGGER_GEARS,
@@ -568,7 +569,28 @@ describe("3. Transactional Engine, Rollback, Crash Recovery & Firmware 1.42", ()
       snapshotRecord(cloneSnapshotFixture(), "macro_0"),
     );
 
-    // ReadOnly mode blocks writes and exports diagnostic bundle
+    // O+ full-open mode: O+ controller (by 1005:2001 or "致动O+" name) stays writable even on mode 7 or missing macro_2!
+    const oplusPartial = cloneSnapshotFixture();
+    oplusPartial.address = "致动O+_CB4EC9 [5Bj2Es5idu]";
+    oplusPartial.decoded.device_name = "致动O+_CB4EC9";
+    delete oplusPartial.raw.macro_2;
+    assert.equal(supportTier(oplusPartial), "verified");
+    for (let slot = 0; slot < 6; slot++) {
+      assert.doesNotThrow(() => form(oplusPartial, slot));
+    }
+
+    const oplusNamedCustom = cloneSnapshotFixture();
+    oplusNamedCustom.address = "致动O+_TEST [abc123]";
+    oplusNamedCustom.identity.pid = "9999";
+    oplusNamedCustom.identity.mode = 7;
+    oplusNamedCustom.capabilities = makeRecord([]);
+    oplusNamedCustom.raw = {};
+    oplusNamedCustom.decoded = { device_name: "致动O+_TEST" };
+    assert.equal(supportTier(oplusNamedCustom), "compatible");
+    assert.deepEqual(snapshotActiveSlots(oplusNamedCustom), [0, 1, 2, 3, 4, 5]);
+
+    // Non-O+ Gen1 controller (PID 2000, mode 7) still blocks writes and exports diagnostic bundle
+    m.snapshotData.identity.pid = "2000";
     m.snapshotData.identity.mode = 7;
     assert.equal(supportTier(m.snapshotData), "read_only");
     const diag = diagnosticBundle(m.snapshotData);
@@ -1615,6 +1637,109 @@ describe("6. v0.7.1 Audit Regressions: Wrong-Device Guard, Durable IDB, Cross-Ta
     }
   });
 
+  it("prevents GATT operation already in progress when notifications arrive before writeValueWithResponse settles", async () => {
+    const fixtureSnap = cloneSnapshotFixture();
+    let gattBusy = false;
+    const notifier = Object.assign(new EventTarget(), {
+      value: null as DataView | null,
+      startNotifications: async () => notifier,
+      stopNotifications: async () => notifier,
+    });
+    const writer = {
+      properties: { write: true },
+      async writeValueWithResponse(bytes: BufferSource) {
+        if (gattBusy) {
+          throw new Error("GATT operation already in progress.");
+        }
+        gattBusy = true;
+        const buf =
+          bytes instanceof ArrayBuffer
+            ? new Uint8Array(bytes)
+            : new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        const req = parse(buf);
+        const page = req.payload[0] ?? 0;
+        let full: number[] = [0];
+        if (req.opcode === 0x91) {
+          full = [7, 0x10, 0x05, 0x20, 0x01, 0x01, 0x37, 0x56];
+        } else if (req.opcode === 0x90) {
+          const nameBytes = Array.from(new TextEncoder().encode("致动O+_CB4EC9"));
+          full = [nameBytes.length, ...nameBytes];
+        } else if (req.opcode === 0xb0) {
+          const kind = req.payload[1];
+          const rec =
+            kind === 1
+              ? fixtureSnap.capabilities
+              : kind === 2
+                ? fixtureSnap.raw.all_keys!
+                : kind === 3
+                  ? fixtureSnap.raw.remap_keys!
+                  : fixtureSnap.raw.macro_keys!;
+          const rawBytes = Array.from(fromHex(rec.hex));
+          full = [rec.declared, ...rawBytes];
+        } else if (req.opcode === 0xb1) {
+          full = snapshotRecord(fixtureSnap, "sticks");
+        } else if (req.opcode === 0xb2) {
+          full = snapshotRecord(fixtureSnap, "triggers");
+        } else if (req.opcode === 0xb3) {
+          full = snapshotRecord(fixtureSnap, "motors");
+        } else if (req.opcode === 0xb6) {
+          full = snapshotRecord(fixtureSnap, "remapping");
+        } else if (req.opcode === 0xb7) {
+          full = snapshotRecord(fixtureSnap, "lighting");
+        } else if (req.opcode === 0xb5) {
+          full = snapshotRecord(fixtureSnap, `macro_${req.payload[1]}`);
+        }
+        const slice =
+          req.opcode === 0x91
+            ? full
+            : full.slice(page * 15, (page + 1) * 15);
+        const reply = Uint8Array.from(frame(0x19, slice, req.serial, 9, null));
+        notifier.value = new DataView(reply.buffer);
+        // Fire notification IMMEDIATELY before writeValueWithResponse resolves (exact Chromium WinRT BLE order!)
+        notifier.dispatchEvent(new Event("characteristicvaluechanged"));
+        await new Promise((resolve) => setTimeout(resolve, 6));
+        gattBusy = false;
+      },
+    };
+    const gatt = {
+      connected: false,
+      async connect() {
+        this.connected = true;
+        return this;
+      },
+      disconnect() {
+        this.connected = false;
+      },
+      async getPrimaryService() {
+        return {
+          async getCharacteristic(uuid: string) {
+            if (uuid === WRITE) return writer;
+            return notifier;
+          },
+        };
+      },
+    };
+    const session = await WebBleSession.connectDevice(
+      {
+        id: "5Bj2Es5idu",
+        name: "致动O+_CB4EC9",
+        gatt,
+      } as unknown as WebBluetoothDevice,
+      { requestTimeoutMs: 500, chunkDelayMs: 0 },
+    );
+    try {
+      const snap = await session.snapshot();
+      assert.equal(snap.errors.length, 0);
+      assert.equal(supportTier(snap), "verified");
+      assert.equal(session.canWrite, true);
+      for (let slot = 0; slot < 6; slot++) {
+        assert.ok(snap.raw[`macro_${slot}`]);
+      }
+    } finally {
+      await session.close();
+    }
+  });
+
   it("strips diagnostic trace from pre-write backups, accepts >256 KiB keymap imports, and meets WCAG 4.5:1 + version parity", async () => {
     // 1. Oversized trace in snapshot.extra is stripped from backup so pending() succeeds
     const dev = fakePad();
@@ -1722,5 +1847,50 @@ describe("6. v0.7.1 Audit Regressions: Wrong-Device Guard, Durable IDB, Cross-Ta
     assert.equal(tauriConf.version, APP_VERSION);
     assert.match(cargoToml, new RegExp(`^version\\s*=\\s*"${APP_VERSION.replace(/\./g, "\\.")}"`, "m"));
     assert.match(winManifest, new RegExp(`version="${APP_VERSION.replace(/\./g, "\\.")}\\.0"`));
+  });
+
+  it("computes 36-sector circularity RMS error, resting drift, and polling rate Hz with zero heap churn", () => {
+    const bench = new StickBenchAnalyzer();
+    // Perfect unit circle across all 36 sectors -> ~0.0% RMS circularity error
+    for (let deg = 0; deg < 360; deg += 5) {
+      const rad = (deg * Math.PI) / 180;
+      bench.push(Math.cos(rad), Math.sin(rad));
+    }
+    assert.equal(bench.coveredCount, 36);
+    assert.ok(bench.avgErrorPct !== null && bench.avgErrorPct < 0.05);
+    assert.match(bench.buildSvgPath(108, 108, 84), /^M.*Z$/);
+
+    // Settle back with 2.5% drift after deflection
+    for (let i = 0; i < 15; i++) {
+      bench.push(0.015, -0.02);
+    }
+    assert.ok(Math.abs(bench.restDriftPct - 2.5) < 0.05);
+
+    const rate = new PollingRateAnalyzer();
+    for (let i = 0; i < 20; i++) {
+      rate.push({
+        slot: 0,
+        buttons: 0,
+        left_trigger: 0,
+        right_trigger: 0,
+        lx: i * 100,
+        ly: 0,
+        rx: 0,
+        ry: 0,
+        fx: i * 0.01,
+        fy: 0,
+        frx: 0,
+        fry: 0,
+        flt: 0,
+        frt: 0,
+        sampleTs: 1000 + i * 4, // 4ms interval = 250 Hz, 0.0ms jitter
+        id: "Test Pad",
+        actuator: null,
+      });
+    }
+    const stats = rate.stats();
+    assert.ok(stats);
+    assert.equal(stats.hz, 250);
+    assert.ok(stats.jitterMs < 0.01);
   });
 });

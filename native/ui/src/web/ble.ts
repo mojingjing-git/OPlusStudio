@@ -6,13 +6,18 @@
 
 import type { RecordData, Snapshot } from "../types.ts";
 import {
+  VERIFIED_137_CAPS,
   capabilityActiveSlots,
+  claimsOPlus,
   hasPerSlotMacroLimits,
   hasRemapSelectList,
+  hydrateOPlusDefaults,
   makeRecord,
   parseCapabilities,
   recordBytes,
   recordPayload,
+  snapshotActiveSlots,
+  snapshotCapabilities,
   supportTier,
 } from "./model.ts";
 import {
@@ -26,6 +31,8 @@ import {
   effectiveGeneration,
   frame,
   hostLength,
+  isOPlusIdentity,
+  nameClaimsOPlus,
   parse,
   parseIdentity,
   query,
@@ -463,6 +470,7 @@ export class WebBleSession implements Device {
     resolve: (packet: Packet) => void;
     reject: (err: Error) => void;
   } | null = null;
+  private gattQueue: Promise<void> = Promise.resolve();
 
   public identity: Identity = {
     vid: "",
@@ -474,6 +482,7 @@ export class WebBleSession implements Device {
   };
   public readonly deviceId: string;
   public address: string;
+  public isOPlus = false;
   public canWrite = false;
   public writableSlots: number[] = [];
   public trace: Record<string, unknown>[] = [];
@@ -581,6 +590,19 @@ export class WebBleSession implements Device {
 
     const idPacket = await this.sendQuery(0x91, []);
     this.identity = parseIdentity(idPacket.payload);
+    this.isOPlus =
+      isOPlusIdentity(this.identity) ||
+      nameClaimsOPlus(this.address) ||
+      nameClaimsOPlus(this.device.name);
+  }
+
+  private enqueueGatt<T>(op: () => Promise<T>): Promise<T> {
+    const run = this.gattQueue.then(op, op);
+    this.gattQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
   private nonce(): number {
@@ -619,50 +641,71 @@ export class WebBleSession implements Device {
   }
 
   private async exchange(wire: Uint8Array): Promise<Packet> {
-    const sent = parse(wire);
-    this.pushTrace({
-      direction: "tx",
-      opcode: sent.opcode,
-      serial: sent.serial,
-      payload: toHex(sent.payload),
-      wire: toHex(wire),
-    });
+    return this.enqueueGatt(async () => {
+      const sent = parse(wire);
+      this.pushTrace({
+        direction: "tx",
+        opcode: sent.opcode,
+        serial: sent.serial,
+        payload: toHex(sent.payload),
+        wire: toHex(wire),
+      });
 
-    if (this.pendingExchange) {
-      this.pendingExchange.reject(new Error("上一条蓝牙请求已被新请求取代"));
-      this.pendingExchange = null;
-    }
+      if (this.pendingExchange) {
+        this.pendingExchange.reject(new Error("上一条蓝牙请求已被新请求取代"));
+        this.pendingExchange = null;
+      }
 
-    return new Promise<Packet>((resolve, reject) => {
-      let settled = false;
-      const finish = (cb: () => void) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        if (this.pendingExchange === entry) {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      let entryRef: {
+        serial: number;
+        resolve: (packet: Packet) => void;
+        reject: (err: Error) => void;
+      } | null = null;
+      let writeSettled = false;
+      let writePromise: Promise<void> = Promise.resolve();
+
+      try {
+        const packetPromise = new Promise<Packet>((resolve, reject) => {
+          entryRef = {
+            serial: sent.serial,
+            resolve,
+            reject,
+          };
+          this.pendingExchange = entryRef;
+        });
+
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error("手柄响应超时，请保持开机并关闭手机 KeyLinker"));
+          }, this.requestTimeoutMs);
+        });
+
+        writePromise = this.writeWire(wire).finally(() => {
+          writeSettled = true;
+        });
+        writePromise.catch(() => undefined);
+        packetPromise.catch(() => undefined);
+
+        const [, packet] = await Promise.race([
+          Promise.all([writePromise, packetPromise]),
+          timeoutPromise,
+        ]);
+        return packet;
+      } finally {
+        if (timer !== null) {
+          clearTimeout(timer);
+        }
+        if (entryRef && this.pendingExchange === entryRef) {
           this.pendingExchange = null;
         }
-        cb();
-      };
-
-      const timer = setTimeout(() => {
-        finish(() =>
-          reject(new Error("手柄响应超时，请保持开机并关闭手机 KeyLinker")),
-        );
-      }, this.requestTimeoutMs);
-
-      const entry = {
-        serial: sent.serial,
-        resolve: (packet: Packet) => finish(() => resolve(packet)),
-        reject: (err: Error) => finish(() => reject(err)),
-      };
-
-      this.pendingExchange = entry;
-      this.writeWire(wire).catch((err) => {
-        finish(() =>
-          reject(err instanceof Error ? err : new Error(String(err))),
-        );
-      });
+        if (!writeSettled) {
+          await Promise.race([
+            writePromise.catch(() => undefined),
+            sleep(250),
+          ]);
+        }
+      }
     });
   }
 
@@ -675,7 +718,7 @@ export class WebBleSession implements Device {
       payload,
       serial,
       this.nonce(),
-      effectiveGeneration(this.identity) === 2,
+      effectiveGeneration(this.identity) === 2 || this.isOPlus,
     );
     return this.exchange(wire);
   }
@@ -706,6 +749,18 @@ export class WebBleSession implements Device {
     return makeRecord(data);
   }
 
+  private async readSnapshotRecord(
+    op: number,
+    args: readonly number[],
+  ): Promise<RecordData> {
+    try {
+      return await this.readPagedRecord(op, args);
+    } catch {
+      await sleep(60);
+      return this.readPagedRecord(op, args);
+    }
+  }
+
   async snapshot(): Promise<Snapshot> {
     this.canWrite = false;
     this.writableSlots = [];
@@ -732,30 +787,41 @@ export class WebBleSession implements Device {
         decoded.device_name = this.device.name.trim();
       }
     }
+    if (nameClaimsOPlus(decoded.device_name)) {
+      this.isOPlus = true;
+    }
 
-    // Read capability descriptor 0xB0 kind 1; degrade safely to ReadOnly on failure
+    // Read capability descriptor 0xB0 kind 1; O+ controllers fall back to standard O+ capabilities
     let capabilities: RecordData;
     try {
-      capabilities = await this.readPagedRecord(0xb0, [0, 1]);
+      capabilities = await this.readSnapshotRecord(0xb0, [0, 1]);
     } catch (e) {
+      if (!this.isOPlus) {
+        errors.push(
+          `读取能力描述符失败（已降级为只读诊断模式）：${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        );
+        return {
+          address: this.address,
+          device_id: this.deviceId,
+          identity: { ...this.identity },
+          raw,
+          decoded,
+          capabilities: makeRecord([]),
+          errors,
+        };
+      }
       errors.push(
-        `读取能力描述符失败（已降级为只读诊断模式）：${
+        `读取能力描述符失败（已按 O+ 默认能力开放编辑）：${
           e instanceof Error ? e.message : String(e)
         }`,
       );
-      return {
-        address: this.address,
-        device_id: this.deviceId,
-        identity: { ...this.identity },
-        raw,
-        decoded,
-        capabilities: makeRecord([]),
-        errors,
-      };
+      capabilities = makeRecord(VERIFIED_137_CAPS);
     }
 
     const effGen = effectiveGeneration(this.identity);
-    if (effGen !== 2) {
+    if (effGen !== 2 && !this.isOPlus) {
       for (const [field, kind] of [
         ["all_keys", 2],
         ["remap_keys", 3],
@@ -791,25 +857,34 @@ export class WebBleSession implements Device {
     try {
       caps = parseCapabilities(capabilities);
     } catch (e) {
+      if (!this.isOPlus) {
+        errors.push(
+          `解析能力描述符失败（已降级为只读模式）：${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        );
+        return {
+          address: this.address,
+          device_id: this.deviceId,
+          identity: { ...this.identity },
+          raw,
+          decoded,
+          capabilities,
+          errors,
+        };
+      }
       errors.push(
-        `解析能力描述符失败（已降级为只读模式）：${
+        `解析能力描述符失败（已按 O+ 默认能力开放编辑）：${
           e instanceof Error ? e.message : String(e)
         }`,
       );
-      return {
-        address: this.address,
-        device_id: this.deviceId,
-        identity: { ...this.identity },
-        raw,
-        decoded,
-        capabilities,
-        errors,
-      };
+      capabilities = makeRecord(VERIFIED_137_CAPS);
+      caps = parseCapabilities(capabilities);
     }
 
     // Read all_keys (kind 2)
     try {
-      const r = await this.readPagedRecord(0xb0, [0, 2]);
+      const r = await this.readSnapshotRecord(0xb0, [0, 2]);
       try {
         decoded.all_keys = decodeKeys(recordBytes(r));
       } catch (e) {
@@ -823,7 +898,7 @@ export class WebBleSession implements Device {
     // Read remap_keys (kind 3) and optional remap_targets (kind 7)
     if (caps.changekey !== 0) {
       try {
-        const r = await this.readPagedRecord(0xb0, [0, 3]);
+        const r = await this.readSnapshotRecord(0xb0, [0, 3]);
         try {
           decoded.remap_keys = decodeKeys(recordBytes(r));
         } catch (e) {
@@ -836,7 +911,7 @@ export class WebBleSession implements Device {
 
       if (hasRemapSelectList(caps)) {
         try {
-          const r = await this.readPagedRecord(0xb0, [0, 7]);
+          const r = await this.readSnapshotRecord(0xb0, [0, 7]);
           try {
             decoded.remap_targets = decodeKeys(recordBytes(r));
           } catch (e) {
@@ -856,7 +931,7 @@ export class WebBleSession implements Device {
     // Read macro_keys (kind 5) and optional macro_limits (kind 6)
     if (caps.macros !== 0) {
       try {
-        const r = await this.readPagedRecord(0xb0, [0, 5]);
+        const r = await this.readSnapshotRecord(0xb0, [0, 5]);
         try {
           decoded.macro_keys = decodeKeys(recordBytes(r));
         } catch (e) {
@@ -869,7 +944,7 @@ export class WebBleSession implements Device {
 
       if (hasPerSlotMacroLimits(caps)) {
         try {
-          const r = await this.readPagedRecord(0xb0, [0, 6]);
+          const r = await this.readSnapshotRecord(0xb0, [0, 6]);
           try {
             decoded.macro_limits = decodeMacroLimits(recordBytes(r));
           } catch (e) {
@@ -896,7 +971,7 @@ export class WebBleSession implements Device {
     ] as const) {
       if (enabled) {
         try {
-          raw[name] = await this.readPagedRecord(op, [0]);
+          raw[name] = await this.readSnapshotRecord(op, [0]);
         } catch (e) {
           errors.push(`读取 ${name} 失败：${e instanceof Error ? e.message : String(e)}`);
         }
@@ -905,7 +980,7 @@ export class WebBleSession implements Device {
 
     for (const slot of capabilityActiveSlots(caps)) {
       try {
-        raw[`macro_${slot}`] = await this.readPagedRecord(0xb5, [0, slot]);
+        raw[`macro_${slot}`] = await this.readSnapshotRecord(0xb5, [0, slot]);
       } catch (e) {
         errors.push(
           `读取 macro_${slot} 失败：${e instanceof Error ? e.message : String(e)}`,
@@ -923,9 +998,14 @@ export class WebBleSession implements Device {
       errors,
     };
 
+    if (claimsOPlus(snap)) {
+      this.isOPlus = true;
+      hydrateOPlusDefaults(snap);
+    }
+
     if (supportTier(snap) !== "read_only") {
       this.canWrite = true;
-      this.writableSlots = capabilityActiveSlots(caps);
+      this.writableSlots = snapshotActiveSlots(snap);
     }
     return snap;
   }
@@ -937,7 +1017,7 @@ export class WebBleSession implements Device {
   }
 
   async write(key: string, payload: readonly number[]): Promise<void> {
-    if (!this.canWrite || effectiveGeneration(this.identity) !== 2) {
+    if (!this.canWrite || (effectiveGeneration(this.identity) !== 2 && !this.isOPlus)) {
       throw new Error("当前设备处于只读模式，禁止写入");
     }
     if (
@@ -1023,6 +1103,7 @@ export class WebBleSession implements Device {
 
   async reconnect(): Promise<void> {
     const expected = { ...this.identity };
+    const prevIsOPlus = this.isOPlus;
     const prevCanWrite = this.canWrite;
     const prevSlots = [...this.writableSlots];
 
@@ -1034,6 +1115,7 @@ export class WebBleSession implements Device {
       await this.close();
       throw new Error("重连设备身份与原设备不同，已停止恢复");
     }
+    this.isOPlus = this.isOPlus || prevIsOPlus;
     this.canWrite = prevCanWrite;
     this.writableSlots = prevSlots;
   }
@@ -1051,9 +1133,14 @@ export class WebBleSession implements Device {
       );
     }
     this.onValueChanged = null;
-    if (this.notifyChar && this.server?.connected) {
+    const notify = this.notifyChar;
+    if (notify && this.server?.connected) {
       try {
-        await withTimeout(this.notifyChar.stopNotifications(), 1500, "stop timeout");
+        await withTimeout(
+          this.enqueueGatt(() => notify.stopNotifications()),
+          1500,
+          "stop timeout",
+        );
       } catch {
         // Ignore stopNotifications failures during disconnect
       }

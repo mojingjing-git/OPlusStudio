@@ -1,4 +1,10 @@
-import { useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { Copy, RotateCcw, Sparkles, Undo2 } from "lucide-react";
 import {
   CURVE_AXIS_MAX,
@@ -16,6 +22,7 @@ import {
   parseCurveRecordChannels,
   projectCurvePreview,
 } from "./curves";
+import { subscribeLiveInputs } from "./liveInput";
 import type {
   Input,
   StickCurveSetting,
@@ -26,7 +33,7 @@ import type {
 interface CurvesPageProps {
   view: View;
   settings: any[];
-  pad: Input | undefined;
+  pad?: Input | undefined;
   inputs?: Input[];
   selectedSlot?: number | null;
   onSelectSlot?: (slot: number | null) => void;
@@ -65,79 +72,161 @@ function formatHalfPct(val200: number): string {
   return Number.isInteger(pct) ? `${pct}%` : `${pct.toFixed(1)}%`;
 }
 
+type LiveCurveChannel = "stick-0" | "stick-1" | "trigger-0" | "trigger-1";
+
 interface CurveCanvasProps {
   idPrefix: string;
+  liveChannel: LiveCurveChannel;
+  selectedSlot: number | null;
   inner: number;
   outerRaw: number;
   maxProgress: number;
   point1: CurvePoint;
   point2: CurvePoint;
-  liveMagnitude: number | null;
   disabled: boolean;
   onPointsChange: (p1: CurvePoint, p2: CurvePoint) => void;
 }
 
 function CurveCanvas({
   idPrefix,
+  liveChannel,
+  selectedSlot,
   inner,
   outerRaw,
   maxProgress,
   point1,
   point2,
-  liveMagnitude,
   disabled,
   onPointsChange,
 }: CurveCanvasProps) {
   const plotRef = useRef<SVGRectElement>(null);
+  const guideLineRef = useRef<SVGLineElement>(null);
+  const liveGroupRef = useRef<SVGGElement>(null);
+  const pillRef = useRef<HTMLSpanElement>(null);
+  const pillTextRef = useRef<HTMLSpanElement>(null);
+  const pillDotRef = useRef<HTMLSpanElement>(null);
+  const lastPillUpdateRef = useRef(0);
   const [dragging, setDragging] = useState<1 | 2 | null>(null);
+
+  const paramsRef = useRef({
+    selectedSlot,
+    inner,
+    outerRaw,
+    maxProgress,
+    point1,
+    point2,
+  });
+  paramsRef.current = {
+    selectedSlot,
+    inner,
+    outerRaw,
+    maxProgress,
+    point1,
+    point2,
+  };
 
   const outerThreshold = Math.max(inner + 1, maxProgress - outerRaw);
   const innerPx = (inner / maxProgress) * PLOT_SIZE;
   const outerPx = (outerThreshold / maxProgress) * PLOT_SIZE;
 
-  const samples = curveShape(point1, point2, 65);
-  const linePath = samples
-    .map(([x, y], idx) => {
-      const sx = (x / CURVE_AXIS_MAX) * PLOT_SIZE;
-      const sy = PLOT_SIZE - (y / CURVE_AXIS_MAX) * PLOT_SIZE;
-      return `${idx === 0 ? "M" : "L"}${sx.toFixed(2)} ${sy.toFixed(2)}`;
-    })
-    .join(" ");
-  const areaPath = `${linePath} L${PLOT_SIZE} ${PLOT_SIZE} L0 ${PLOT_SIZE} Z`;
+  const p0x = point1[0];
+  const p0y = point1[1];
+  const p1x = point2[0];
+  const p1y = point2[1];
+
+  const { linePath, areaPath } = useMemo(() => {
+    const samples = curveShape([p0x, p0y], [p1x, p1y], 65);
+    const lp = samples
+      .map(([x, y], idx) => {
+        const sx = (x / CURVE_AXIS_MAX) * PLOT_SIZE;
+        const sy = PLOT_SIZE - (y / CURVE_AXIS_MAX) * PLOT_SIZE;
+        return `${idx === 0 ? "M" : "L"}${sx.toFixed(2)} ${sy.toFixed(2)}`;
+      })
+      .join(" ");
+    return {
+      linePath: lp,
+      areaPath: `${lp} L${PLOT_SIZE} ${PLOT_SIZE} L0 ${PLOT_SIZE} Z`,
+    };
+  }, [p0x, p0y, p1x, p1y]);
 
   const p1SvgX = (point1[0] / CURVE_AXIS_MAX) * PLOT_SIZE;
   const p1SvgY = PLOT_SIZE - (point1[1] / CURVE_AXIS_MAX) * PLOT_SIZE;
   const p2SvgX = (point2[0] / CURVE_AXIS_MAX) * PLOT_SIZE;
   const p2SvgY = PLOT_SIZE - (point2[1] / CURVE_AXIS_MAX) * PLOT_SIZE;
 
-  // Live hardware telemetry projection
-  let liveState: {
-    rawPx: number;
-    dotX: number;
-    dotY: number;
-    inPct: number;
-    outPct: number;
-    zoneLabel: string;
-  } | null = null;
+  // Zero-React-render imperative live hardware projection
+  useEffect(() => {
+    return subscribeLiveInputs(({ pads, now }) => {
+      const {
+        selectedSlot: slotPref,
+        inner: curInner,
+        outerRaw: curOuter,
+        maxProgress: curMax,
+        point1: curP1,
+        point2: curP2,
+      } = paramsRef.current;
 
-  if (liveMagnitude !== null) {
-    const projected = projectCurvePreview(
-      liveMagnitude,
-      inner,
-      outerRaw,
-      maxProgress,
-      point1,
-      point2,
-    );
-    liveState = {
-      rawPx: projected.clampedMag * PLOT_SIZE,
-      dotX: (projected.curveX / CURVE_AXIS_MAX) * PLOT_SIZE,
-      dotY: PLOT_SIZE - (projected.curveY / CURVE_AXIS_MAX) * PLOT_SIZE,
-      inPct: projected.inPct,
-      outPct: projected.outPct,
-      zoneLabel: projected.zoneLabel,
-    };
-  }
+      const pad =
+        (slotPref !== null ? pads.find((p) => p.slot === slotPref) : undefined) ||
+        pads[0];
+
+      if (!pad) {
+        if (guideLineRef.current) guideLineRef.current.style.display = "none";
+        if (liveGroupRef.current) liveGroupRef.current.style.display = "none";
+        if (pillDotRef.current) pillDotRef.current.style.display = "none";
+        if (pillRef.current) pillRef.current.classList.add("muted");
+        const idleMsg = "拖拽 P1 / P2 圆点实时塑形";
+        if (pillTextRef.current && pillTextRef.current.textContent !== idleMsg) {
+          pillTextRef.current.textContent = idleMsg;
+        }
+        return;
+      }
+
+      const mag =
+        liveChannel === "stick-0"
+          ? Math.min(1, Math.hypot(pad.fx, pad.fy))
+          : liveChannel === "stick-1"
+            ? Math.min(1, Math.hypot(pad.frx, pad.fry))
+            : liveChannel === "trigger-0"
+              ? pad.flt
+              : pad.frt;
+
+      const projected = projectCurvePreview(
+        mag,
+        curInner,
+        curOuter,
+        curMax,
+        curP1,
+        curP2,
+      );
+      const rawPx = projected.clampedMag * PLOT_SIZE;
+      const dotX = (projected.curveX / CURVE_AXIS_MAX) * PLOT_SIZE;
+      const dotY = PLOT_SIZE - (projected.curveY / CURVE_AXIS_MAX) * PLOT_SIZE;
+
+      if (guideLineRef.current) {
+        guideLineRef.current.style.display = "";
+        const xStr = rawPx.toFixed(2);
+        guideLineRef.current.setAttribute("x1", xStr);
+        guideLineRef.current.setAttribute("x2", xStr);
+      }
+      if (liveGroupRef.current) {
+        liveGroupRef.current.style.display = "";
+        liveGroupRef.current.setAttribute(
+          "transform",
+          `translate(${dotX.toFixed(2)}, ${dotY.toFixed(2)})`,
+        );
+      }
+      if (now - lastPillUpdateRef.current >= 75) {
+        lastPillUpdateRef.current = now;
+        if (pillDotRef.current) pillDotRef.current.style.display = "";
+        if (pillRef.current) pillRef.current.classList.remove("muted");
+        const nextMsg = `输入 ${projected.inPct}% → 输出 ${projected.outPct}% · ${projected.zoneLabel}`;
+        if (pillTextRef.current && pillTextRef.current.textContent !== nextMsg) {
+          pillTextRef.current.textContent = nextMsg;
+        }
+      }
+    });
+  }, [liveChannel]);
 
   const [safeP1, safeP2] = sanitizeControlPoints(point1, point2);
 
@@ -202,20 +291,14 @@ function CurveCanvas({
     <div className="curve-canvas-block">
       <div className="curve-canvas-bar">
         <span className="subtle">响应曲线画布（固定端点 0,0 → 255,255）</span>
-        {liveState ? (
+        <span ref={pillRef} className="curve-telemetry-pill muted">
           <span
-            className="curve-telemetry-pill"
-            title="系统输入流经当前草稿参数计算的软件预览估算值，非手柄蓝牙直接回传"
-          >
-            <span className="dot online" />
-            草稿估算 · 输入 {liveState.inPct}% → 输出 {liveState.outPct}% ·{" "}
-            {liveState.zoneLabel}
-          </span>
-        ) : (
-          <span className="curve-telemetry-pill muted">
-            拖拽 P1 / P2 圆点实时塑形（草稿预览）
-          </span>
-        )}
+            ref={pillDotRef}
+            className="dot online"
+            style={{ display: "none" }}
+          />
+          <span ref={pillTextRef}>拖拽 P1 / P2 圆点实时塑形</span>
+        </span>
       </div>
 
       <div className="curve-svg-shell">
@@ -329,15 +412,15 @@ function CurveCanvas({
             <path d={areaPath} fill={`url(#${areaGradId})`} />
 
             {/* Live Raw Physical Travel Hairline */}
-            {liveState && (
-              <line
-                x1={liveState.rawPx}
-                y1={0}
-                x2={liveState.rawPx}
-                y2={PLOT_SIZE}
-                className="curve-live-guide"
-              />
-            )}
+            <line
+              ref={guideLineRef}
+              x1={0}
+              y1={0}
+              x2={0}
+              y2={PLOT_SIZE}
+              style={{ display: "none" }}
+              className="curve-live-guide"
+            />
           </g>
 
           {/* Outer Glass Rim Frame */}
@@ -378,22 +461,15 @@ function CurveCanvas({
           />
 
           {/* Live Emerald Projection Jewel */}
-          {liveState && (
-            <g className="curve-live-group" pointerEvents="none">
-              <circle
-                cx={liveState.dotX}
-                cy={liveState.dotY}
-                r={10.5}
-                className="curve-live-halo"
-              />
-              <circle
-                cx={liveState.dotX}
-                cy={liveState.dotY}
-                r={5.6}
-                className="curve-live-dot"
-              />
-            </g>
-          )}
+          <g
+            ref={liveGroupRef}
+            className="curve-live-group"
+            pointerEvents="none"
+            style={{ display: "none" }}
+          >
+            <circle cx={0} cy={0} r={10.5} className="curve-live-halo" />
+            <circle cx={0} cy={0} r={5.6} className="curve-live-dot" />
+          </g>
 
           {/* Draggable Specular Control Handle P1 */}
           <g
@@ -532,8 +608,6 @@ function CurveCanvas({
 export default function CurvesPage({
   view,
   settings,
-  pad,
-  inputs = [],
   selectedSlot = null,
   onSelectSlot,
   isTauri = true,
@@ -543,6 +617,18 @@ export default function CurvesPage({
   onNotice,
 }: CurvesPageProps) {
   const [tab, setTab] = useState<"sticks" | "triggers">("sticks");
+  const [onlineSlots, setOnlineSlots] = useState<number[]>([]);
+  const prevOnlineKeyRef = useRef("");
+
+  useEffect(() => {
+    return subscribeLiveInputs(({ pads }) => {
+      const key = pads.map((p) => p.slot).join(",");
+      if (key !== prevOnlineKeyRef.current) {
+        prevOnlineKeyRef.current = key;
+        setOnlineSlots(pads.map((p) => p.slot));
+      }
+    });
+  }, []);
 
   const caps = view.capabilities_info;
   const stickRecord = parseCurveRecordChannels(view.snapshot.raw.sticks);
@@ -711,28 +797,24 @@ export default function CurvesPage({
 
         <div className="curves-preview-note">
           <span>
-            实时光点为<strong>草稿软件估算</strong>（读取系统{" "}
-            {isTauri ? "XInput" : "Gamepad"} 输入套用当前草稿曲线，与蓝牙配置通道独立；以保存至手柄后的实际固件输出为准）。
+            拨动手柄摇杆或按压扳机，即可在曲线上实时查看输入与输出行程映射。
           </span>
-          {inputs.length > 0 && (
+          {onlineSlots.length > 0 && (
             <div className="curves-slot-picker">
               <span>
-                {inputs.length > 1 ? "多手柄预览槽位：" : "当前输入槽位："}
+                {onlineSlots.length > 1 ? "多手柄预览槽位：" : "当前输入槽位："}
               </span>
-              {inputs.map((item) => {
-                const active = pad?.slot === item.slot;
+              {onlineSlots.map((slotNum, idx) => {
+                const active =
+                  selectedSlot !== null ? selectedSlot === slotNum : idx === 0;
                 return (
                   <button
-                    key={item.slot}
+                    key={slotNum}
                     type="button"
-                    className={
-                      active && (selectedSlot === item.slot || inputs.length === 1 || selectedSlot === null)
-                        ? "selected"
-                        : ""
-                    }
-                    onClick={() => onSelectSlot?.(item.slot)}
+                    className={active ? "selected" : ""}
+                    onClick={() => onSelectSlot?.(slotNum)}
                   >
-                    #{item.slot + 1}
+                    #{slotNum + 1}
                   </button>
                 );
               })}
@@ -771,15 +853,6 @@ export default function CurvesPage({
 
             const outerThreshold = STICK_MAX_PROGRESS - current.outer_raw;
             const activePreset = matchCurvePreset(current.point1, current.point2);
-            const liveMag = pad
-              ? Math.min(
-                  1,
-                  Math.hypot(
-                    side === 0 ? pad.lx : pad.rx,
-                    side === 0 ? pad.ly : pad.ry,
-                  ) / 32767,
-                )
-              : null;
 
             return (
               <section className="panel curve-card" key={`stick-${side}`}>
@@ -800,12 +873,13 @@ export default function CurvesPage({
                 {/* Interactive 240x240 SVG Response Curve */}
                 <CurveCanvas
                   idPrefix={`stick-${side}`}
+                  liveChannel={side === 0 ? "stick-0" : "stick-1"}
+                  selectedSlot={selectedSlot}
                   inner={current.inner}
                   outerRaw={current.outer_raw}
                   maxProgress={STICK_MAX_PROGRESS}
                   point1={current.point1}
                   point2={current.point2}
-                  liveMagnitude={liveMag}
                   disabled={busy}
                   onPointsChange={(p1, p2) =>
                     commitStick(side, { ...current, point1: p1, point2: p2 })
@@ -1083,12 +1157,6 @@ export default function CurvesPage({
             const outerThreshold = TRIGGER_MAX_PROGRESS - current.outer_raw;
             const activePreset = matchCurvePreset(current.point1, current.point2);
             const activeGear = matchTriggerGear(current.inner, current.outer_raw);
-            const liveMag = pad
-              ? Math.min(
-                  1,
-                  (side === 0 ? pad.left_trigger : pad.right_trigger) / 255,
-                )
-              : null;
 
             return (
               <section className="panel curve-card" key={`trigger-${side}`}>
@@ -1109,12 +1177,13 @@ export default function CurvesPage({
                 {/* Interactive 240x240 SVG Response Curve */}
                 <CurveCanvas
                   idPrefix={`trigger-${side}`}
+                  liveChannel={side === 0 ? "trigger-0" : "trigger-1"}
+                  selectedSlot={selectedSlot}
                   inner={current.inner}
                   outerRaw={current.outer_raw}
                   maxProgress={TRIGGER_MAX_PROGRESS}
                   point1={current.point1}
                   point2={current.point2}
-                  liveMagnitude={liveMag}
                   disabled={busy}
                   onPointsChange={(p1, p2) =>
                     commitTrigger(side, { ...current, point1: p1, point2: p2 })

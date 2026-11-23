@@ -519,9 +519,63 @@ fn motor_rounding_invariance_and_select_start_remap_guard() {
 }
 
 #[tokio::test]
-async fn readonly_degradation_blocks_writes_and_exports_diagnostics() {
+async fn oplus_full_open_unlocks_writes_while_non_oplus_gen1_stays_readonly() {
+    // 1. O+ controller in mode 7 (or missing macro_2 like real-world GATT hiccup) stays full-open writable!
+    let mut oplus_mode7 = Mock::new();
+    oplus_mode7.snapshot.identity.mode = 7;
+    oplus_mode7.snapshot.raw.remove("macro_2");
+    assert_eq!(oplus_mode7.snapshot.support_tier(), SupportTier::Compatible);
+    assert_eq!(oplus_mode7.snapshot.active_slots(), vec![0, 1, 2, 3, 4, 5]);
+    assert!(form(&oplus_mode7.snapshot, 2).is_ok());
+
+    let dir_oplus = tempfile::tempdir().unwrap();
+    let stick_target = desired_setting(
+        &oplus_mode7.snapshot,
+        "sticks",
+        &serde_json::json!({
+            "side": 0,
+            "inner": 8,
+            "outer_raw": 8,
+            "point1": [85, 85],
+            "point2": [170, 170],
+            "invert_x": false,
+            "invert_y": false,
+            "swap": false,
+        }),
+    )
+    .unwrap();
+    let expected_sticks = oplus_mode7.snapshot.record("sticks").unwrap();
+    let saved = execute(
+        &mut oplus_mode7,
+        dir_oplus.path(),
+        "save",
+        vec![Edit {
+            key: "sticks".into(),
+            expected: expected_sticks,
+            target: stick_target.clone(),
+        }],
+    )
+    .await
+    .unwrap();
+    assert_eq!(saved.snapshot.record("sticks").unwrap(), stick_target);
+
+    // 2. Device claiming "致动O+" by name alone (even with custom PID & empty capabilities) is full-open writable!
+    let mut named_oplus = Mock::new();
+    named_oplus.snapshot.identity.pid = "9999".into();
+    named_oplus.snapshot.identity.mode = 0;
+    named_oplus.snapshot.address = "致动O+_CB4EC9 [5Bj2Es5idu]".into();
+    named_oplus.snapshot.capabilities = Record::new(&[]);
+    named_oplus.snapshot.raw.clear();
+    named_oplus.snapshot.decoded = serde_json::json!({"device_name": "致动O+_CB4EC9"});
+    assert_eq!(named_oplus.snapshot.support_tier(), SupportTier::Compatible);
+    assert_eq!(named_oplus.snapshot.active_slots(), vec![0, 1, 2, 3, 4, 5]);
+    for slot in 0..6 {
+        assert!(form(&named_oplus.snapshot, slot).is_ok());
+    }
+
+    // 3. Non-O+ Gen1 device (PID 2000, mode 7, non-O+ name) still degrades safely to ReadOnly
     let mut m = Mock::new();
-    // Mode 7 on generation 2 => effective_generation == 1 => ReadOnly
+    m.snapshot.identity.pid = "2000".into();
     m.snapshot.identity.mode = 7;
     assert_eq!(m.snapshot.support_tier(), SupportTier::ReadOnly);
 

@@ -3,7 +3,7 @@
 use crate::{
     Result,
     model::{Snapshot, SupportTier, normalize_payload_for, validate_record, validate_restore_record},
-    protocol::Identity,
+    protocol::{Identity, name_claims_oplus},
     storage,
 };
 use async_trait::async_trait;
@@ -417,7 +417,9 @@ pub fn pending(root: &Path) -> Vec<Journal> {
 pub fn validate_journal(root: &Path, j: &Journal) -> Result<Snapshot> {
     if j.schema != 1
         || !VALID_KINDS.contains(&j.kind.as_str())
-        || j.identity.effective_generation() != 2
+        || (j.identity.effective_generation() != 2
+            && !j.identity.is_oplus_id()
+            && !name_claims_oplus(&j.address))
         || j.id.is_empty()
         || !j.id.chars().all(|c| c.is_ascii_digit() || c == '-')
         || j.records.len() > 20

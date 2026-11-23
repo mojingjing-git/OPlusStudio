@@ -9,8 +9,8 @@ use btleplug::{
 use futures::{Stream, StreamExt};
 use oplus_core::{
     Result,
-    model::{Capabilities, Record, Snapshot, SupportTier},
-    protocol::{self as p, Identity, Packet},
+    model::{Capabilities, Record, Snapshot, SupportTier, VERIFIED_137_CAPS},
+    protocol::{self as p, Identity, Packet, name_claims_oplus},
     transaction::Device,
 };
 use serde::{Deserialize, Serialize};
@@ -84,6 +84,8 @@ pub struct Session {
     notifications: Pin<Box<dyn Stream<Item = ValueNotification> + Send>>,
     pub identity: Identity,
     pub address: String,
+    pub local_name: Option<String>,
+    pub is_oplus: bool,
     pub can_write: bool,
     pub writable_slots: Vec<u8>,
     serial: u32,
@@ -102,6 +104,14 @@ impl Session {
             .into_iter()
             .find(|d| d.address().to_string().eq_ignore_ascii_case(address))
             .ok_or("没有发现手柄，请开机、退出手机 KeyLinker 后重试")?;
+        let local_name = peripheral
+            .properties()
+            .await
+            .ok()
+            .flatten()
+            .and_then(|pr| pr.local_name)
+            .map(|n| n.trim().to_string())
+            .filter(|n| !n.is_empty());
         let init = async {
             peripheral
                 .connect_with_timeout(Duration::from_secs(12))
@@ -151,6 +161,8 @@ impl Session {
                     sensor: 0,
                 },
                 address: address.to_uppercase(),
+                local_name,
+                is_oplus: false,
                 can_write: false,
                 writable_slots: vec![],
                 serial: 0,
@@ -159,6 +171,8 @@ impl Session {
                 trace: vec![],
             };
             s.identity = Identity::parse(&s.query(0x91, &[]).await?.payload)?;
+            s.is_oplus = s.identity.is_oplus_id()
+                || s.local_name.as_deref().is_some_and(name_claims_oplus);
             Ok(s)
         }
         .await;
@@ -232,7 +246,7 @@ impl Session {
             payload,
             serial,
             self.nonce(),
-            self.identity.effective_generation() == 2,
+            self.identity.effective_generation() == 2 || self.is_oplus,
         )?;
         self.exchange(wire).await
     }
@@ -257,6 +271,16 @@ impl Session {
             return Err("记录声明长度与分段响应不一致".into());
         }
         Ok(Record::new(&data))
+    }
+
+    async fn snapshot_record(&mut self, op: u8, args: &[u8]) -> Result<Record> {
+        match self.record(op, args).await {
+            Ok(r) => Ok(r),
+            Err(_) => {
+                sleep(Duration::from_millis(60)).await;
+                self.record(op, args).await
+            }
+        }
     }
 
     pub async fn close(&mut self) {
@@ -291,25 +315,41 @@ impl Device for Session {
                 }
             }
         }
+        if !decoded.contains_key("device_name") {
+            if let Some(local) = &self.local_name {
+                decoded.insert("device_name".into(), json!(local));
+            }
+        }
+        if decoded
+            .get("device_name")
+            .and_then(|v| v.as_str())
+            .is_some_and(name_claims_oplus)
+        {
+            self.is_oplus = true;
+        }
 
-        // Read capability descriptor 0xB0 kind 1; degrade to ReadOnly on failure rather than disconnecting
-        let capabilities = match self.record(0xb0, &[0, 1]).await {
+        // Read capability descriptor 0xB0 kind 1; O+ controllers fall back to standard O+ capabilities
+        let mut capabilities = match self.snapshot_record(0xb0, &[0, 1]).await {
             Ok(c) => c,
             Err(e) => {
-                errors.push(format!("读取能力描述符失败（已降级为只读诊断模式）：{e}"));
-                return Ok(Snapshot {
-                    address: self.address.clone(),
-                    identity: self.identity.clone(),
-                    raw,
-                    decoded: decoded.into(),
-                    capabilities: Record::new(&[]),
-                    errors,
-                    extra: BTreeMap::from([("trace".into(), json!(self.trace))]),
-                });
+                if !self.is_oplus {
+                    errors.push(format!("读取能力描述符失败（已降级为只读诊断模式）：{e}"));
+                    return Ok(Snapshot {
+                        address: self.address.clone(),
+                        identity: self.identity.clone(),
+                        raw,
+                        decoded: decoded.into(),
+                        capabilities: Record::new(&[]),
+                        errors,
+                        extra: BTreeMap::from([("trace".into(), json!(self.trace))]),
+                    });
+                }
+                errors.push(format!("读取能力描述符失败（已按 O+ 默认能力开放编辑）：{e}"));
+                Record::new(&VERIFIED_137_CAPS)
             }
         };
 
-        if self.identity.effective_generation() != 2 {
+        if self.identity.effective_generation() != 2 && !self.is_oplus {
             for (name, kind) in [("all_keys", 2u8), ("remap_keys", 3), ("macro_keys", 5)] {
                 if let Ok(r) = self.record(0xb0, &[0, kind]).await {
                     if let Ok(bytes) = r.bytes() {
@@ -338,21 +378,26 @@ impl Device for Session {
         let caps = match Capabilities::parse(&capabilities) {
             Ok(c) => c,
             Err(e) => {
-                errors.push(format!("解析能力描述符失败（已降级为只读模式）：{e}"));
-                return Ok(Snapshot {
-                    address: self.address.clone(),
-                    identity: self.identity.clone(),
-                    raw,
-                    decoded: decoded.into(),
-                    capabilities,
-                    errors,
-                    extra: BTreeMap::from([("trace".into(), json!(self.trace))]),
-                });
+                if !self.is_oplus {
+                    errors.push(format!("解析能力描述符失败（已降级为只读模式）：{e}"));
+                    return Ok(Snapshot {
+                        address: self.address.clone(),
+                        identity: self.identity.clone(),
+                        raw,
+                        decoded: decoded.into(),
+                        capabilities,
+                        errors,
+                        extra: BTreeMap::from([("trace".into(), json!(self.trace))]),
+                    });
+                }
+                errors.push(format!("解析能力描述符失败（已按 O+ 默认能力开放编辑）：{e}"));
+                capabilities = Record::new(&VERIFIED_137_CAPS);
+                Capabilities::parse(&capabilities)?
             }
         };
 
         // Always try reading all_keys (kind 2)
-        match self.record(0xb0, &[0, 2]).await {
+        match self.snapshot_record(0xb0, &[0, 2]).await {
             Ok(r) => {
                 match r.bytes().and_then(|b| p::decode_keys(&b)) {
                     Ok(keys) => {
@@ -367,7 +412,7 @@ impl Device for Session {
 
         // Read remap_keys (kind 3) and optional remap_targets (kind 7, D6.bit1) when changekey != 0
         if caps.changekey != 0 {
-            match self.record(0xb0, &[0, 3]).await {
+            match self.snapshot_record(0xb0, &[0, 3]).await {
                 Ok(r) => {
                     match r.bytes().and_then(|b| p::decode_keys(&b)) {
                         Ok(keys) => {
@@ -380,7 +425,7 @@ impl Device for Session {
                 Err(e) => errors.push(format!("读取 remap_keys 失败：{e}")),
             }
             if caps.has_remap_select_list() {
-                match self.record(0xb0, &[0, 7]).await {
+                match self.snapshot_record(0xb0, &[0, 7]).await {
                     Ok(r) => {
                         match r.bytes().and_then(|b| p::decode_keys(&b)) {
                             Ok(keys) => {
@@ -397,7 +442,7 @@ impl Device for Session {
 
         // Read macro_keys (kind 5) and optional macro_limits (kind 6, D8.bit1) when macros != 0
         if caps.macros != 0 {
-            match self.record(0xb0, &[0, 5]).await {
+            match self.snapshot_record(0xb0, &[0, 5]).await {
                 Ok(r) => {
                     match r.bytes().and_then(|b| p::decode_keys(&b)) {
                         Ok(keys) => {
@@ -410,7 +455,7 @@ impl Device for Session {
                 Err(e) => errors.push(format!("读取 macro_keys 失败：{e}")),
             }
             if caps.has_per_slot_macro_limits() {
-                match self.record(0xb0, &[0, 6]).await {
+                match self.snapshot_record(0xb0, &[0, 6]).await {
                     Ok(r) => {
                         match r.bytes().and_then(|b| p::decode_macro_limits(&b)) {
                             Ok(limits) => {
@@ -434,7 +479,7 @@ impl Device for Session {
             (caps.lighting != 0, "lighting", 0xb7),
         ] {
             if enabled {
-                match self.record(op, &[0]).await {
+                match self.snapshot_record(op, &[0]).await {
                     Ok(r) => {
                         raw.insert(name.into(), r);
                     }
@@ -444,7 +489,7 @@ impl Device for Session {
         }
 
         for slot in caps.active_slots() {
-            match self.record(0xb5, &[0, slot]).await {
+            match self.snapshot_record(0xb5, &[0, slot]).await {
                 Ok(r) => {
                     raw.insert(format!("macro_{slot}"), r);
                 }
@@ -452,7 +497,7 @@ impl Device for Session {
             }
         }
 
-        let snapshot = Snapshot {
+        let mut snapshot = Snapshot {
             address: self.address.clone(),
             identity: self.identity.clone(),
             raw,
@@ -461,6 +506,11 @@ impl Device for Session {
             errors,
             extra: BTreeMap::from([("trace".into(), json!(self.trace))]),
         };
+
+        if snapshot.claims_oplus() {
+            self.is_oplus = true;
+            snapshot.hydrate_oplus_defaults();
+        }
 
         if snapshot.support_tier() != SupportTier::ReadOnly {
             self.can_write = true;
@@ -475,7 +525,7 @@ impl Device for Session {
     }
 
     async fn write(&mut self, key: &str, payload: &[u8]) -> Result<()> {
-        if !self.can_write || self.identity.effective_generation() != 2 {
+        if !self.can_write || (self.identity.effective_generation() != 2 && !self.is_oplus) {
             return Err("当前设备处于只读模式，禁止写入".into());
         }
         if payload.is_empty() || payload.len() > 240 || payload[0] as usize != payload.len() - 1 {
@@ -548,6 +598,7 @@ impl Device for Session {
 
     async fn reconnect(&mut self) -> Result<()> {
         let expected = self.identity.clone();
+        let prev_is_oplus = self.is_oplus;
         let prev_can_write = self.can_write;
         let prev_slots = self.writable_slots.clone();
         self.close().await;
@@ -556,6 +607,7 @@ impl Device for Session {
             new.close().await;
             return Err("重连设备身份与原设备不同，已停止恢复".into());
         }
+        new.is_oplus |= prev_is_oplus;
         new.can_write = prev_can_write;
         new.writable_slots = prev_slots;
         *self = new;

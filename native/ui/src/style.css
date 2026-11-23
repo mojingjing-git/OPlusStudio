@@ -429,7 +429,10 @@ select {
 }
 
 html[data-theme="dark"]
-  input:not([type="range"]):not([type="checkbox"]):not([type="color"]),
+  input:not([type="range"]):not([type="checkbox"]):not([type="color"]) {
+  background-color: rgba(34, 47, 72, 0.62);
+}
+
 select::picker-icon {
   display: none;
 }
@@ -1613,7 +1616,7 @@ label > input:not([type="range"]):not([type="color"]):not([type="checkbox"]) {
   outline-offset: -1px;
   border-radius: 1.35rem;
   background: var(--glass-chrome);
-  backdrop-filter: url(#liquid-refract) blur(26px) saturate(190%);
+  backdrop-filter: blur(26px) saturate(190%);
   -webkit-backdrop-filter: blur(26px) saturate(190%);
   box-shadow: var(--specular-panel);
   padding: 0.82rem 1.45rem;
@@ -3485,6 +3488,376 @@ html[data-theme="dark"] .curve-deadzone-fill.outer {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
   .remap-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ==========================================================================
+   High-FPS Zero-Re-Render Gamepad Benchmark (`InputTesterPage.tsx`)
+   ========================================================================== */
+
+.tester-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  contain: layout style;
+}
+
+.tester-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.9rem 1.25rem;
+}
+
+.tester-topbar-left {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.tester-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.tester-title-row h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.tester-device-sub {
+  color: var(--muted);
+  font-size: 0.76rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tester-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.tester-slot-pills {
+  display: inline-flex;
+  gap: 0.35rem;
+}
+
+.tester-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.tester-right-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.tester-card {
+  contain: layout style paint;
+}
+
+.tester-radars-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 0.45rem;
+}
+
+.tester-radar-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.85rem 0.75rem;
+  border-radius: 1.1rem;
+  background: var(--glass-card);
+  border: 1px solid var(--glass-border-subtle);
+}
+
+.tester-radar-head {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  text-align: center;
+}
+
+.tester-radar-head strong {
+  font-size: 0.86rem;
+}
+
+.tester-radar-head code {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.tester-radar-svg {
+  width: 100%;
+  max-width: 13.5rem;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+
+.tester-radar-outer {
+  fill: var(--glass-recessed);
+  stroke: var(--accent-border);
+  stroke-width: 1.4;
+}
+
+.tester-radar-mid {
+  fill: none;
+  stroke: var(--glass-divider);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.tester-radar-dz {
+  fill: rgba(18, 183, 106, 0.08);
+  stroke: var(--emerald);
+  stroke-width: 1;
+  stroke-opacity: 0.55;
+  stroke-dasharray: 2 2;
+}
+
+.tester-radar-axis {
+  stroke: var(--glass-divider);
+  stroke-width: 1;
+}
+
+.tester-radar-tick {
+  stroke: var(--muted);
+  stroke-opacity: 0.35;
+  stroke-width: 1;
+}
+
+.tester-radar-tick.major {
+  stroke-opacity: 0.65;
+  stroke-width: 1.35;
+}
+
+.tester-circ-poly {
+  fill: var(--accent-tint);
+  stroke: var(--accent-bright);
+  stroke-width: 1.8;
+  stroke-linejoin: round;
+}
+
+.tester-rest-dot {
+  fill: var(--warning);
+  stroke: rgba(255, 255, 255, 0.85);
+  stroke-width: 1;
+}
+
+.tester-live-halo {
+  fill: var(--emerald-tint);
+  stroke: var(--emerald);
+  stroke-opacity: 0.45;
+  stroke-width: 1.2;
+}
+
+.tester-live-dot {
+  fill: var(--emerald);
+  stroke: #ffffff;
+  stroke-width: 1.6;
+}
+
+.tester-metrics-pair {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  padding-top: 0.25rem;
+}
+
+.tester-metrics-pair > div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.42rem 0.5rem;
+  border-radius: 0.78rem;
+  background: var(--glass-recessed);
+  border: 1px solid var(--glass-border-subtle);
+}
+
+.tester-metrics-pair span {
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.tester-metrics-pair strong {
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.tester-triggers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  margin-top: 0.4rem;
+}
+
+.tester-trig-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.36rem;
+}
+
+.tester-trig-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.82rem;
+}
+
+.tester-trig-head > div {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.tester-trig-head code {
+  font-size: 0.78rem;
+}
+
+.tester-trig-head small {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.tester-trig-track {
+  position: relative;
+  height: 0.86rem;
+  border-radius: 999px;
+  background: var(--glass-recessed);
+  border: 1px solid var(--glass-border-subtle);
+  overflow: hidden;
+}
+
+.tester-trig-fill {
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-bright) 100%);
+  transform-origin: 0 50%;
+  transform: scaleX(0);
+  will-change: transform;
+}
+
+.tester-trig-peak {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  left: 0%;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--emerald);
+  pointer-events: none;
+}
+
+.tester-rumble-row {
+  margin-top: 0.95rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--glass-divider);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.tester-rumble-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  font-weight: 640;
+  color: var(--muted);
+}
+
+.tester-rumble-btns {
+  display: inline-flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.tester-pad-visual {
+  display: flex;
+  justify-content: center;
+  padding: 0.25rem 0 0.65rem;
+}
+
+.tester-front-svg {
+  width: 100%;
+  max-width: 19rem;
+  height: auto;
+  display: block;
+}
+
+.schem-shell {
+  fill: var(--glass-recessed);
+  stroke: var(--pad-rim-mid);
+  stroke-width: 1.6;
+}
+
+.schem-well {
+  fill: var(--glass-recessed);
+  stroke: var(--glass-divider);
+  stroke-width: 1.2;
+}
+
+.schem-trig {
+  fill: var(--accent-bright);
+}
+
+.schem-node {
+  fill: var(--paddle-fill);
+  stroke: var(--paddle-stroke);
+  stroke-width: 1.3;
+}
+
+.schem-node.is-tested {
+  stroke: var(--emerald);
+  fill: var(--emerald-tint);
+}
+
+.schem-node.is-on {
+  fill: var(--accent-bright);
+  stroke: #ffffff;
+}
+
+.input-buttons.tester-buttons {
+  margin-top: 0.25rem;
+}
+
+.input-buttons > span.tested {
+  border-color: var(--emerald);
+  color: var(--text);
+  background: var(--emerald-tint);
+}
+
+@media (max-width: 1120px) {
+  .tester-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .tester-radars-row {
     grid-template-columns: minmax(0, 1fr);
   }
 }

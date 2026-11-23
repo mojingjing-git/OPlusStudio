@@ -186,10 +186,16 @@ fn view(snapshot: &Snapshot) -> Result<Value> {
         let layout = snapshot.layout()?;
         for &i in &active_slots {
             forms.insert(i, model::form(snapshot, i)?);
-            programs.insert(
-                i,
-                model::Program::parse(&snapshot.record(&format!("macro_{i}"))?, &layout)?,
-            );
+            let prog = match model::Program::parse(&snapshot.record(&format!("macro_{i}"))?, &layout) {
+                Ok(p) => p,
+                Err(_) if snapshot.claims_oplus() => model::Program {
+                    steps: vec![],
+                    loop_ms: 0,
+                    trigger: 0,
+                },
+                Err(e) => return Err(e),
+            };
+            programs.insert(i, prog);
             slot_limits.insert(i, snapshot.slot_step_limit(i));
         }
     }

@@ -245,6 +245,21 @@ export function isVerified137(identity: Identity): boolean {
   );
 }
 
+export function isOPlusIdentity(identity: Identity): boolean {
+  return (
+    identity.vid.toUpperCase() === "1005" &&
+    identity.pid.toUpperCase() === "2001"
+  );
+}
+
+export function nameClaimsOPlus(name: string | null | undefined): boolean {
+  if (!name) return false;
+  const lower = name.toLowerCase();
+  return ["o+", "oplus", "o plus", "致动o", "zd o"].some((needle) =>
+    lower.includes(needle),
+  );
+}
+
 export function normalizeIdentity(raw: any): Identity {
   if (
     !raw ||

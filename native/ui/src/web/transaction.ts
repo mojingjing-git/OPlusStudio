@@ -20,6 +20,8 @@ import {
 import {
   type Identity,
   effectiveGeneration,
+  isOPlusIdentity,
+  nameClaimsOPlus,
   normalizeIdentity,
   sameIdentity,
 } from "./protocol.ts";
@@ -389,7 +391,9 @@ export async function validateJournal(
     j.schema !== 1 ||
     !VALID_KINDS.has(j.kind) ||
     !j.identity ||
-    effectiveGeneration(normalizeIdentity(j.identity)) !== 2 ||
+    (effectiveGeneration(normalizeIdentity(j.identity)) !== 2 &&
+      !isOPlusIdentity(normalizeIdentity(j.identity)) &&
+      !nameClaimsOPlus(j.address)) ||
     typeof j.id !== "string" ||
     j.id.length === 0 ||
     !/^[0-9-]+$/.test(j.id) ||

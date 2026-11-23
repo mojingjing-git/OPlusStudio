@@ -31,6 +31,7 @@ import {
   capabilityMotorChannels,
   capabilityStickSides,
   capabilityTriggerSides,
+  claimsOPlus,
   defaultKeymapStore,
   desiredSetting,
   diagnosticBundle,
@@ -43,10 +44,10 @@ import {
   hexSpaced,
   importKeymapAny,
   importProfile,
-  parseCapabilities,
   parseProgram,
   recordFromPayload,
   snapshotActiveSlots,
+  snapshotCapabilities,
   snapshotLayout,
   snapshotPreset,
   snapshotRecord,
@@ -266,11 +267,11 @@ async function saveLabels(
   });
 }
 
-async function buildView(snapshot: Snapshot): Promise<View> {
+export async function buildView(snapshot: Snapshot): Promise<View> {
   const tier = supportTier(snapshot);
-  let caps: ReturnType<typeof parseCapabilities> | null = null;
+  let caps: ReturnType<typeof snapshotCapabilities> | null = null;
   try {
-    caps = parseCapabilities(snapshot.capabilities);
+    caps = snapshotCapabilities(snapshot);
   } catch {
     caps = null;
   }
@@ -284,10 +285,15 @@ async function buildView(snapshot: Snapshot): Promise<View> {
     const layout = snapshotLayout(snapshot);
     for (const slot of activeSlots) {
       forms[String(slot)] = form(snapshot, slot);
-      programs[String(slot)] = parseProgram(
-        snapshotRecord(snapshot, `macro_${slot}`),
-        layout,
-      );
+      try {
+        programs[String(slot)] = parseProgram(
+          snapshotRecord(snapshot, `macro_${slot}`),
+          layout,
+        );
+      } catch (e) {
+        if (!claimsOPlus(snapshot)) throw e;
+        programs[String(slot)] = { steps: [], loop_ms: 0, trigger: 0 };
+      }
       slotLimits[String(slot)] = snapshotSlotStepLimit(snapshot, slot);
     }
   }
