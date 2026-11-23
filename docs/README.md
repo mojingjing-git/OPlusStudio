@@ -4,8 +4,8 @@
 
 ## 用户与部署文档
 
-- [native-user-guide.md](native-user-guide.md)：Windows 桌面版使用说明，涵盖蓝牙板载配置、摇杆与扳机曲线、手柄性能测试台、电脑端键盘宏与恢复中心。
-- [web-driver-guide.md](web-driver-guide.md)：在线网页驱动使用条件、Web Bluetooth 连接流程与 GitHub Pages 部署架构说明。
+- [native-user-guide.md](native-user-guide.md)：Windows 桌面版使用说明，涵盖蓝牙板载配置、摇杆与扳机曲线、手柄性能测试台、电脑端键盘宏、恢复中心与免登录反馈。
+- [web-driver-guide.md](web-driver-guide.md)：在线网页驱动使用条件、Web Bluetooth 连接流程、GitHub Pages 部署与反馈同步工作流说明。
 
 ## 架构、协议与验证资料
 

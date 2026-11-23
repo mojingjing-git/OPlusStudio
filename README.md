@@ -1,14 +1,14 @@
-# O+ Studio 0.7.2
+# O+ Studio 0.7.3
 
 > 🌐 **在线零安装网页驱动（Edge / Chrome 直连蓝牙）**：**[https://mojingjing-git.github.io/OPlusStudio/](https://mojingjing-git.github.io/OPlusStudio/)**  
 > 💻 **Windows 免安装原生桌面版（支持电脑后台键盘宏）**：**[前往 GitHub Releases 下载最新版](https://github.com/mojingjing-git/OPlusStudio/releases/latest)**
 
-致动 O+ 全系及 KeyLinker 第二代兼容手柄的 **Windows 原生桌面版 + 零安装纯前端网页驱动** 同源双形态工具。采用 **Rust + Tauri 2 + React + Web Bluetooth** 架构，零 Python / Qt 依赖，桌面端保持 `asInvoker` 标准用户权限与 `PerMonitorV2` 高分屏自适应，网页端直接部署于 **GitHub Pages** 免安装即开即用。
+致动 O+ 全系及 KeyLinker 第二代兼容手柄的 **Windows 原生桌面版 + 零安装纯前端网页驱动** 同源双形态工具。采用 **Rust + Tauri 2 + React + Web Bluetooth** 架构，零 Python / Qt 依赖，桌面端保持 `asInvoker` 标准用户权限与 `PerMonitorV2` 高分屏自适应，网页端直接部署于 **GitHub Pages** 免安装即开即用，内置国内直连的隐私保护统计与免登录问题反馈通道。
 
 ## 两种使用方式
 
 ### 1. Windows 原生桌面版（全功能：蓝牙板载配置 + 电脑后台键鼠宏）
-双击根目录 `Start-OPlus.cmd`，或直接运行 `releases/0.7.2/OPlusStudio/OPlusStudio.Native.exe`。
+双击根目录 `Start-OPlus.cmd`，或直接运行 `releases/0.7.3/OPlusStudio/OPlusStudio.Native.exe`。
 - **蓝牙通道**：读取能力描述符、编辑板载背键、**左右摇杆内外死区 / 响应曲线 / X·Y 轴反向 / 左右互换**、**左右扳机起始与末端死区 / 四档行程预设 / 响应曲线**、振动强度、标准改键、RGB 灯区与导出诊断包。
 - **USB / 2.4G（XInput）通道**：满帧率手柄性能测试台（双摇杆 36 扇区圆度与松手漂移、扳机压感峰值、采样回报率监测、全按键留痕与曲线实时光点）以及**电脑端原生键盘/鼠标宏映射**（无需连接蓝牙即可直接使用，支持 `F8` 全局急停，方案库上限 `8 MiB`）。
 
@@ -37,8 +37,8 @@ git push -u origin main
 #    即可自动部署在线网页驱动：https://<用户名>.github.io/<仓库名>/
 
 # 3. （可选）推送版本标签，自动校验版本号并构建发布 OPlusStudio-Windows-x64.zip 到 GitHub Releases
-git tag v0.7.2
-git push origin v0.7.2
+git tag v0.7.3
+git push origin v0.7.3
 ```
 
 详细步骤请参阅 **[文档导航](docs/README.md)** 与 **[网页驱动与 GitHub Pages 部署指南](docs/web-driver-guide.md)**。
@@ -59,6 +59,10 @@ git push origin v0.7.2
 - **零依赖低延迟后台线程**：基于 Windows 高精度等待定时器（`CreateWaitableTimerExW` `2 ms` 节拍，空闲时 `Condvar` 0% CPU 挂起）与标准用户态 `SendInput`。
 - **背键 → 电脑键盘宏一键暗号桥接**：内置 8 槽低冲突三键板载暗号预设（如 `M1 = Back + LS + RS`），桌面端与网页端均可一键同步并烧录至手柄。
 - **无串扰组合键匹配、物理键盘录入与 `F8` 全局急停**：支持单次执行、按住循环、按下切换循环、纯滚轮脉冲步与旧版 `0.4.0` `profile.json` 导入；遇到 UIPI 或反作弊拦截时优雅放弃注入并提示。
+
+### 4. 国内直连使用统计与免登录反馈同步架构
+- **隐私友好访问与连接计数**：通过边缘 Worker（`cloud-relay/worker.mjs`）对访客与设备特征做加盐 SHA-256 哈希去重，统计双端活跃人数与已连接手柄数量，不存储原始 IP 或 Cookie。
+- **免登录直达 GitHub Issues**：玩家在网页端或桌面端遇到异常时，无需注册 GitHub 账号即可一键提交问题描述并附带 `oplus-diagnostic-v1` 诊断快照，由定时工作流（`.github/workflows/sync-feedback-issues.yml`）自动拉取并创建 GitHub Issues。
 
 [0.7.1 验证记录](docs/v0.7.1-validation.md) · [0.7.0 验证记录](docs/v0.7-validation.md) · [网页驱动部署指南](docs/web-driver-guide.md) · [使用指南](docs/native-user-guide.md) · [0.6.0 验证记录](docs/v0.6-validation.md) · [0.5.0 验证记录](docs/native-validation.md) · [旧版说明](README-0.4.md)
 

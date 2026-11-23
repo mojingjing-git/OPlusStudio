@@ -1,6 +1,6 @@
 # O+ Studio 零安装网页驱动与 GitHub Pages 部署指南
 
-O+ Studio 0.7.2 支持**同源双形态发布**：同一套代码库既可构建为免安装 Windows 桌面版（`OPlusStudio.Native.exe`），也可直接托管到 **GitHub Pages** 作为纯前端零安装**网页驱动**运行，无任何后端服务器依赖，所有数据 100% 保存在用户本地浏览器（`IndexedDB`）与手柄闪存中。
+O+ Studio 0.7.3 支持**同源双形态发布**：同一套代码库既可构建为免安装 Windows 桌面版（`OPlusStudio.Native.exe`），也可直接托管到 **GitHub Pages** 作为纯前端零安装**网页驱动**运行，板载配置与宏方案保存在用户本地浏览器（`IndexedDB`）与手柄闪存中，并支持国内直连免登录问题反馈。
 
 ---
 
@@ -53,8 +53,8 @@ git push -u origin main
 当你希望让网页端点击 **“下载 Windows 桌面版运行宏”** 按钮直接跳转到最新版桌面程序时，只需推送一个 `v*` 版本标签：
 
 ```powershell
-git tag v0.7.2
-git push origin v0.7.2
+git tag v0.7.3
+git push origin v0.7.3
 ```
 
 GitHub Actions 工作流 **Release Windows Desktop Edition**（`.github/workflows/release-desktop.yml`）会自动在云端 `windows-latest` 环境完成：

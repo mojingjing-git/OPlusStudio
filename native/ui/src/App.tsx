@@ -38,10 +38,19 @@ import {
   LoaderCircle,
   ScanLine,
   FileSpreadsheet,
+  MessageSquarePlus,
+  Users,
 } from "lucide-react";
 import CurvesPage from "./CurvesPage";
+import FeedbackModal from "./FeedbackModal";
 import InputTesterPage from "./InputTesterPage";
 import KeymapPage from "./KeymapPage";
+import {
+  type PublicStats,
+  fetchPublicStats,
+  pingBleConnect,
+  pingVisit,
+} from "./telemetry";
 import {
   APP_VERSION,
   type View,
@@ -500,6 +509,8 @@ export default function App() {
     [runnerSnapshot, setRunnerSnapshot] =
       useState<RunnerSnapshot>(defaultRunner),
     [keymapModalOpen, setKeymapModalOpen] = useState(false),
+    [feedbackOpen, setFeedbackOpen] = useState(false),
+    [publicStats, setPublicStats] = useState<PublicStats | null>(null),
     [previewSlot, setPreviewSlot] = useState<number | null>(null),
     [onlineSlot, setOnlineSlot] = useState<number | null>(null);
 
@@ -523,7 +534,8 @@ export default function App() {
     identifying ||
     naming ||
     Boolean(recoveryPreview) ||
-    keymapModalOpen;
+    keymapModalOpen ||
+    feedbackOpen;
 
   const activeKeymapProfile =
     keymapStore.profiles.find((p) => p.id === keymapStore.active_profile_id) ||
@@ -569,6 +581,13 @@ export default function App() {
       setSelected(v.active_slots[0]);
     }
     localStorage.removeItem("draft:" + v.snapshot.address);
+    void pingBleConnect(
+      isTauri ? "desktop" : "web",
+      APP_VERSION,
+      `${v.snapshot.identity.vid}:${v.snapshot.identity.pid}:${v.snapshot.address}`,
+    ).then((s) => {
+      if (s) setPublicStats(s);
+    });
   };
 
   useEffect(() => {
@@ -590,13 +609,17 @@ export default function App() {
         if (v.runner) setRunnerSnapshot(v.runner);
       })
       .catch(() => {});
+    pingVisit(isTauri ? "desktop" : "web", APP_VERSION).then((s) => {
+      if (s) setPublicStats(s);
+      else void fetchPublicStats().then((f) => f && setPublicStats(f));
+    });
     const unlisten = listen<string>("status", (e) => setStatus(e.payload)).catch(
       () => () => {},
     );
     return () => {
       unlisten.then((f) => f());
     };
-  }, []);
+  }, [isTauri]);
 
   // Poll macro runner state gently only in Tauri desktop, updating React state only on actual change
   useEffect(() => {
@@ -1039,6 +1062,12 @@ export default function App() {
             )}
           </div>
           <button
+            className="sidebar-feedback-btn"
+            onClick={() => setFeedbackOpen(true)}
+          >
+            <MessageSquarePlus size={17} /> 问题反馈 · 免登录
+          </button>
+          <button
             onClick={() => setTheme(theme === "light" ? "dark" : "light")}
           >
             {theme === "light" ? <Moon size={17} /> : <Sun size={17} />}{" "}
@@ -1056,6 +1085,9 @@ export default function App() {
           </label>
           <small className="version">
             O+ Studio {APP_VERSION} · {isTauri ? "Rust" : "Web Driver"}
+            {publicStats && publicStats.total_uv > 0
+              ? ` · ${publicStats.total_uv} 人已使用`
+              : ""}
           </small>
         </div>
       </aside>
@@ -1161,6 +1193,9 @@ export default function App() {
             <div className="message error" role="alert">
               <strong>操作未完成</strong>
               <span>{error}</span>
+              <button className="mini" onClick={() => setFeedbackOpen(true)}>
+                免登录上报
+              </button>
               <button
                 className="icon"
                 aria-label="关闭错误"
@@ -1268,9 +1303,12 @@ export default function App() {
               <div className="row-actions">
                 <button
                   className="primary"
-                  disabled={busy}
-                  onClick={exportDiagnostic}
+                  onClick={() => setFeedbackOpen(true)}
                 >
+                  <MessageSquarePlus size={18} />
+                  免登录一键上传兼容诊断
+                </button>
+                <button disabled={busy} onClick={exportDiagnostic}>
                   <FileSpreadsheet size={18} />
                   导出设备兼容诊断包
                 </button>
@@ -1535,6 +1573,46 @@ export default function App() {
             />
           ) : (
             <div className="tools-layout">
+              <section className="panel community-panel">
+                <div className="section-heading">
+                  <h2>社区统计与免登录问题反馈</h2>
+                  <Users size={21} />
+                </div>
+                <p>
+                  遇到型号连接异常、功能建议或兼容性问题，无需注册 GitHub
+                  账号即可直接上传反馈（可自动附带当前手柄兼容诊断快照）。
+                </p>
+                {publicStats && (
+                  <div className="telemetry-grid">
+                    <div className="telemetry-card">
+                      <span>累计使用玩家</span>
+                      <strong>{publicStats.total_uv}</strong>
+                    </div>
+                    <div className="telemetry-card">
+                      <span>今日活跃</span>
+                      <strong>{publicStats.today_uv}</strong>
+                    </div>
+                    <div className="telemetry-card">
+                      <span>已连接手柄</span>
+                      <strong>{publicStats.ble_connects}</strong>
+                    </div>
+                    <div className="telemetry-card">
+                      <span>已收集反馈</span>
+                      <strong>{publicStats.feedback_total}</strong>
+                    </div>
+                  </div>
+                )}
+                <div className="tool-actions">
+                  <button
+                    className="primary"
+                    onClick={() => setFeedbackOpen(true)}
+                  >
+                    <MessageSquarePlus size={18} />
+                    免登录提交问题 / 兼容反馈
+                  </button>
+                </div>
+              </section>
+
               <section className="panel">
                 <div className="section-heading">
                   <h2>板载配置与兼容诊断</h2>
@@ -2045,6 +2123,17 @@ export default function App() {
           </div>
           {error && <p className="field-error">{error}</p>}
         </Dialog>
+      )}
+
+      {feedbackOpen && (
+        <FeedbackModal
+          close={() => setFeedbackOpen(false)}
+          isTauri={isTauri}
+          view={view}
+          lastError={error}
+          address={address}
+          onStatsUpdate={setPublicStats}
+        />
       )}
     </div>
   );

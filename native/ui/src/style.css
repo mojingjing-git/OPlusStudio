@@ -234,6 +234,7 @@ body {
 }
 
 input,
+textarea,
 code,
 pre,
 dd {
@@ -401,6 +402,7 @@ button:disabled {
 
 button:focus-visible,
 input:focus-visible,
+textarea:focus-visible,
 select:focus-visible,
 summary:focus-visible {
   outline: 2.5px solid var(--accent);
@@ -408,6 +410,7 @@ summary:focus-visible {
 }
 
 input:not([type="range"]):not([type="checkbox"]):not([type="color"]),
+textarea,
 select {
   min-height: 2.38rem;
   border: 1px solid var(--glass-border);
@@ -422,6 +425,8 @@ select {
   padding: 0.36rem 0.75rem;
   max-width: 100%;
   min-width: 0;
+  font-family: inherit;
+  font-size: inherit;
   font-variant-numeric: tabular-nums;
   transition:
     border-color 0.16s ease,
@@ -429,7 +434,8 @@ select {
 }
 
 html[data-theme="dark"]
-  input:not([type="range"]):not([type="checkbox"]):not([type="color"]) {
+  input:not([type="range"]):not([type="checkbox"]):not([type="color"]),
+html[data-theme="dark"] textarea {
   background-color: rgba(34, 47, 72, 0.62);
 }
 
@@ -3848,6 +3854,186 @@ html[data-theme="dark"] .curve-deadzone-fill.outer {
   border-color: var(--emerald);
   color: var(--text);
   background: var(--emerald-tint);
+}
+
+/* ---------- Community Telemetry & Zero-Login Feedback Modal ---------- */
+.sidebar-feedback-btn {
+  color: var(--accent) !important;
+  font-weight: 640 !important;
+  background: var(--accent-tint) !important;
+  border-color: var(--accent-border) !important;
+  margin-bottom: 0.18rem;
+}
+
+.sidebar-feedback-btn:hover:not(:disabled) {
+  background: var(--accent-tint-strong) !important;
+}
+
+.community-panel {
+  grid-column: 1 / -1;
+}
+
+.telemetry-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  gap: 0.68rem;
+  margin: 0.85rem 0 1rem;
+}
+
+.telemetry-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  padding: 0.72rem 0.9rem;
+  border-radius: 0.92rem;
+  background: var(--glass-card);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--specular-control);
+}
+
+.telemetry-card > span {
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+
+.telemetry-card > strong {
+  font-size: 1.28rem;
+  font-weight: 720;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.feedback-dialog {
+  width: min(36rem, calc(100vw - 2rem));
+}
+
+.feedback-dialog > header > h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.48rem;
+}
+
+.feedback-form {
+  display: grid;
+  gap: 0.82rem;
+}
+
+.feedback-lead {
+  font-size: 0.81rem;
+  color: var(--muted);
+}
+
+.feedback-cats {
+  margin-bottom: 0.1rem;
+}
+
+.feedback-field {
+  display: grid;
+  gap: 0.34rem;
+}
+
+.feedback-field > span {
+  font-size: 0.78rem;
+  font-weight: 620;
+  color: var(--text);
+}
+
+.feedback-field > input,
+.feedback-field > textarea {
+  width: 100%;
+}
+
+.feedback-field > textarea {
+  resize: vertical;
+  min-height: 5.6rem;
+  padding: 0.55rem 0.78rem;
+  line-height: 1.52;
+}
+
+.feedback-hp {
+  position: absolute !important;
+  left: -9999px !important;
+  width: 1px !important;
+  height: 1px !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+.feedback-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.52rem;
+  padding: 0.62rem 0.78rem;
+  border-radius: 0.84rem;
+  background: var(--glass-recessed);
+  border: 1px solid var(--glass-border-subtle);
+  font-size: 0.77rem;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.feedback-check > input[type="checkbox"] {
+  margin-top: 0.18rem;
+  flex-shrink: 0;
+}
+
+.feedback-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.feedback-submit-group {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-left: auto;
+}
+
+.feedback-gh-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.feedback-gh-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.feedback-receipt {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.2rem 0.2rem;
+}
+
+.receipt-badge {
+  width: 3rem;
+  height: 3rem;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--emerald-tint);
+  color: var(--emerald);
+  border: 1px solid var(--emerald);
+}
+
+.receipt-code-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.5rem 0.85rem;
+  border-radius: 0.82rem;
+  background: var(--glass-recessed);
+  border: 1px solid var(--glass-border-subtle);
 }
 
 @media (max-width: 1120px) {

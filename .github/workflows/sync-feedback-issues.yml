@@ -1,0 +1,127 @@
+name: Sync Anonymous Feedback to GitHub Issues
+
+on:
+  schedule:
+    - cron: "*/20 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: sync-feedback-issues
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Pull Cloudflare Feedback Queue
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Pull pending feedback and open GitHub Issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          FEEDBACK_API_URL: ${{ secrets.OPLUS_FEEDBACK_API_URL }}
+          FEEDBACK_SYNC_SECRET: ${{ secrets.OPLUS_FEEDBACK_SYNC_SECRET }}
+        run: |
+          node - <<'EOF'
+          const apiBase = (process.env.FEEDBACK_API_URL || "https://oplus.20000102.online").replace(/\/+$/, "");
+          const syncSecret = process.env.FEEDBACK_SYNC_SECRET || "";
+          const ghToken = process.env.GH_TOKEN || "";
+          const repo = process.env.GITHUB_REPOSITORY || "";
+
+          if (!syncSecret) {
+            console.log("OPLUS_FEEDBACK_SYNC_SECRET is not set; skipping.");
+            process.exit(0);
+          }
+
+          async function ghRequest(path, method = "GET", body = undefined) {
+            const res = await fetch(`https://api.github.com${path}`, {
+              method,
+              headers: {
+                Authorization: `Bearer ${ghToken}`,
+                Accept: "application/vnd.github+json",
+                "User-Agent": "OPlusStudio-Feedback-Sync/1.0",
+                "X-GitHub-Api-Version": "2022-11-28",
+                ...(body ? { "Content-Type": "application/json" } : {}),
+              },
+              body: body ? JSON.stringify(body) : undefined,
+            });
+            const text = await res.text();
+            let json = null;
+            try { json = JSON.parse(text); } catch {}
+            return { ok: res.ok, status: res.status, json, text };
+          }
+
+          async function ensureLabel(name, color, description) {
+            await ghRequest(`/repos/${repo}/labels`, "POST", { name, color, description });
+          }
+
+          async function main() {
+            const pullRes = await fetch(`${apiBase}/api/inbox/pull`, {
+              headers: { Authorization: `Bearer ${syncSecret}` },
+            });
+            if (!pullRes.ok) {
+              throw new Error(`Failed to pull inbox (${pullRes.status}): ${await pullRes.text()}`);
+            }
+            const data = await pullRes.json();
+            const items = Array.isArray(data?.items) ? data.items : [];
+            if (items.length === 0) {
+              console.log("No pending anonymous feedback items.");
+              return;
+            }
+
+            console.log(`Found ${items.length} pending feedback item(s).`);
+            await ensureLabel("玩家反馈", "0066FF", "通过 O+ Studio 免登录反馈通道提交");
+            await ensureLabel("手柄兼容", "0E8A16", "手柄型号或蓝牙协议兼容反馈");
+
+            const acked = [];
+            for (const item of items) {
+              const labels = ["玩家反馈"];
+              if (item.category === "compat") labels.push("手柄兼容");
+              else if (item.category === "feature") labels.push("enhancement");
+              else labels.push("bug");
+
+              const created = await ghRequest(`/repos/${repo}/issues`, "POST", {
+                title: `[玩家反馈] ${item.title || item.id}`,
+                body: item.markdown || item.description || "匿名反馈",
+                labels,
+              });
+
+              if (!created.ok) {
+                console.error(`Failed to create issue for ${item.id}: ${created.status} ${created.text}`);
+                continue;
+              }
+
+              console.log(`Created Issue #${created.json.number}: ${created.json.html_url}`);
+              acked.push({
+                kv_key: item.kv_key,
+                id: item.id,
+                issue_url: created.json.html_url,
+                issue_number: created.json.number,
+              });
+            }
+
+            if (acked.length > 0) {
+              const ackRes = await fetch(`${apiBase}/api/inbox/ack`, {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${syncSecret}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ acked }),
+              });
+              if (!ackRes.ok) {
+                throw new Error(`Failed to ack inbox (${ackRes.status}): ${await ackRes.text()}`);
+              }
+              console.log(`Acknowledged ${acked.length} item(s).`);
+            }
+          }
+
+          main().catch((err) => {
+            console.error(err);
+            process.exit(1);
+          });
+          EOF

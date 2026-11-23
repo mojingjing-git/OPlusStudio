@@ -5,6 +5,13 @@ import { describe, it } from "node:test";
 import { inferDesktopReleaseUrl } from "../src/backend.ts";
 import { PollingRateAnalyzer, StickBenchAnalyzer } from "../src/liveInput.ts";
 import {
+  TELEMETRY_API_BASE,
+  pingBleConnect,
+  pingVisit,
+  resetTelemetrySessionGuards,
+  submitAnonymousFeedback,
+} from "../src/telemetry.ts";
+import {
   CURVE_PRESETS,
   TRIGGER_GEARS,
   curveShape,
@@ -1892,5 +1899,97 @@ describe("6. v0.7.1 Audit Regressions: Wrong-Device Guard, Durable IDB, Cross-Ta
     assert.ok(stats);
     assert.equal(stats.hz, 250);
     assert.ok(stats.jitterMs < 0.01);
+  });
+
+  it("handles telemetry pings, session deduplication, anonymous feedback submission, and Tauri CSP allowlist", async () => {
+    const tauriConf = JSON.parse(
+      fs.readFileSync(
+        new URL("../../app/tauri.conf.json", import.meta.url),
+        "utf-8",
+      ),
+    );
+    const csp: string = tauriConf.app?.security?.csp || "";
+    assert.ok(
+      csp.includes(`connect-src ipc: http://ipc.localhost ${TELEMETRY_API_BASE}`),
+      `Expected Tauri CSP connect-src to allow ${TELEMETRY_API_BASE}`,
+    );
+
+    resetTelemetrySessionGuards();
+    const calls: { url: string; body: any }[] = [];
+    const mockFetch = (async (input: any, init?: RequestInit) => {
+      const url = String(input);
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      calls.push({ url, body });
+      if (url.endsWith("/api/ping")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            stats: {
+              total_uv: 3,
+              total_pv: 8,
+              today_uv: 2,
+              web_uv: 2,
+              desktop_uv: 1,
+              ble_connects: 2,
+              feedback_total: 1,
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.endsWith("/api/feedback")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            id: "FB-20261123-A1B2C3",
+            issue_url: null,
+            issue_number: null,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response("Not Found", { status: 404 });
+    }) as typeof fetch;
+
+    const visit1 = await pingVisit("web", APP_VERSION, {
+      apiBase: "https://oplus.20000102.online",
+      fetchImpl: mockFetch,
+    });
+    const visit2 = await pingVisit("web", APP_VERSION, {
+      apiBase: "https://oplus.20000102.online",
+      fetchImpl: mockFetch,
+    });
+    assert.equal(visit1?.total_uv, 3);
+    assert.equal(visit2, null); // Deduplicated within session
+
+    const ble1 = await pingBleConnect("web", APP_VERSION, "1005:2001:CB4EC9", {
+      apiBase: "https://oplus.20000102.online",
+      fetchImpl: mockFetch,
+    });
+    const ble2 = await pingBleConnect("web", APP_VERSION, "1005:2001:CB4EC9", {
+      apiBase: "https://oplus.20000102.online",
+      fetchImpl: mockFetch,
+    });
+    assert.equal(ble1?.ble_connects, 2);
+    assert.equal(ble2, null); // Deduplicated per device signature
+
+    const receipt = await submitAnonymousFeedback(
+      {
+        category: "compat",
+        title: "致动O+传奇版蓝牙读取测试",
+        description: "野生玩家免登录直接上传诊断快照",
+        contact: "B站测试玩家",
+        platform: "web",
+        app_version: APP_VERSION,
+        diagnostic: { format: "oplus-diagnostic-v1" },
+      },
+      {
+        apiBase: "https://oplus.20000102.online",
+        fetchImpl: mockFetch,
+      },
+    );
+    assert.equal(receipt.id, "FB-20261123-A1B2C3");
+    assert.equal(calls.length, 3);
+    assert.equal(calls[2].body.category, "compat");
   });
 });
