@@ -24,7 +24,6 @@ export type FeedbackPayload = {
   category: FeedbackCategory;
   title: string;
   description: string;
-  contact?: string;
   platform: "desktop" | "web";
   app_version: string;
   diagnostic?: Record<string, unknown> | null;
@@ -169,7 +168,7 @@ export async function submitAnonymousFeedback(
       opts?.fetchImpl,
     );
   } catch {
-    throw new Error("网络连接超时，请检查网络或改用导出诊断包反馈");
+    throw new Error("网络连接超时，请检查网络后再试");
   }
 
   let data: any = null;

@@ -62,7 +62,7 @@ git push origin v0.7.3
 
 ### 4. 国内直连使用统计与免登录反馈同步架构
 - **隐私友好访问与连接计数**：通过边缘 Worker（`cloud-relay/worker.mjs`）对访客与设备特征做加盐 SHA-256 哈希去重，统计双端活跃人数与已连接手柄数量，不存储原始 IP 或 Cookie。
-- **免登录直达 GitHub Issues**：玩家在网页端或桌面端遇到异常时，无需注册 GitHub 账号即可一键提交问题描述并附带 `oplus-diagnostic-v1` 诊断快照，由定时工作流（`.github/workflows/sync-feedback-issues.yml`）自动拉取并创建 GitHub Issues。
+- **免登录直达 GitHub Issues**：在网页或桌面端提交的标题和描述会公开，请勿填写联系方式或其他隐私信息。可自行勾选公开型号编码、固件版本和支持分级；完整诊断包不会上传到 GitHub。转发由 Worker 即时完成，或由定时工作流（`.github/workflows/sync-feedback-issues.yml`）从队列同步。
 
 [0.7.1 验证记录](docs/v0.7.1-validation.md) · [0.7.0 验证记录](docs/v0.7-validation.md) · [网页驱动部署指南](docs/web-driver-guide.md) · [使用指南](docs/native-user-guide.md) · [0.6.0 验证记录](docs/v0.6-validation.md) · [0.5.0 验证记录](docs/native-validation.md) · [旧版说明](README-0.4.md)
 

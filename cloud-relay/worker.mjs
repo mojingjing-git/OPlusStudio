@@ -151,6 +151,51 @@ function publicStatsView(stats, day) {
   };
 }
 
+// Only known, bounded compatibility fields may leave the relay. Device names
+// can be customized; addresses, raw records and error strings are not public.
+function publicDiagnostic(value) {
+  const { vid, pid, version_display } = value?.identity || {};
+  const hexId = (id) => typeof id === "string" && /^[0-9a-f]{4}$/i.test(id);
+  const identity = {};
+  if (hexId(vid) && hexId(pid)) {
+    identity.vid = vid;
+    identity.pid = pid;
+  }
+  if (typeof version_display === "string" && /^[0-9]{1,3}(\.[0-9]{1,3}){1,2}$/.test(version_display)) {
+    identity.version_display = version_display;
+  }
+  const supportTier = ["verified", "compatible", "read_only"].includes(value?.support_tier)
+    ? value.support_tier : null;
+  return Object.keys(identity).length || supportTier
+    ? { identity, support_tier: supportTier } : null;
+}
+
+function publicFeedbackText(value) {
+  const text = typeof value === "string" ? value.trim() : "";
+  // Older clients can prepend an unstructured, possibly multiline error.
+  // Do not try to distinguish the error from any appended prose.
+  return text.startsWith("[最近提示]") ? "" : text;
+}
+
+function publicFeedback(item) {
+  return {
+    id: item.id,
+    category: item.category,
+    platform: item.platform,
+    app_version: typeof item.app_version === "string" && /^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(item.app_version)
+      ? item.app_version : "未知",
+    created_at_bj: item.created_at_bj,
+    title: publicFeedbackText(item.title) || "玩家匿名反馈",
+    description: publicFeedbackText(item.description),
+    diagnostic: publicDiagnostic(item.diagnostic),
+  };
+}
+
+function publicIssue(item) {
+  const feedback = publicFeedback(item);
+  return { title: `[玩家反馈] ${feedback.title}`, body: formatIssueMarkdown(feedback) };
+}
+
 function formatIssueMarkdown(item) {
   const catLabel =
     item.category === "compat"
@@ -165,31 +210,19 @@ function formatIssueMarkdown(item) {
     "| :--- | :--- |",
     `| **反馈类型** | ${catLabel} |`,
     `| **运行形态** | ${item.platform === "desktop" ? "Windows 桌面版" : "在线网页驱动"} (\`v${item.app_version}\`) |`,
-    `| **提交者称呼 / 联系方式** | ${item.contact ? item.contact.replace(/[|\r\n]/g, " ") : "匿名玩家"} |`,
     `| **提交时间 (UTC+8)** | ${item.created_at_bj} |`,
     "",
     "### 问题描述",
     "",
-    item.description,
+    item.description || "未提供可公开的描述。",
   ];
 
   if (item.diagnostic) {
-    const idObj = item.diagnostic.identity || {};
-    lines.push(
-      "",
-      "### 手柄设备摘要",
-      `- **名称 / 标识**：\`${String(item.diagnostic.device_name || item.diagnostic.address || "未知")}\``,
-      `- **VID:PID / 固件**：\`${idObj.vid || "?"}:${idObj.pid || "?"}\` · 固件 \`${idObj.version_display || "?"}\` (mode ${idObj.mode ?? "?"} / gen ${idObj.generation ?? "?"})`,
-      `- **支持分级**：\`${item.diagnostic.support_tier || "unknown"}\``,
-      "",
-      "<details>",
-      "<summary>点击展开完整 oplus-diagnostic-v1 诊断快照 JSON</summary>",
-      "",
-      "```json",
-      JSON.stringify(item.diagnostic, null, 2).slice(0, 45000),
-      "```",
-      "</details>",
-    );
+    const { vid, pid, version_display } = item.diagnostic.identity;
+    lines.push("", "### 手柄兼容摘要");
+    if (vid && pid) lines.push(`- **VID:PID**：\`${vid}:${pid}\``);
+    if (version_display) lines.push(`- **固件**：\`${version_display}\``);
+    if (item.diagnostic.support_tier) lines.push(`- **支持分级**：\`${item.diagnostic.support_tier}\``);
   }
   return lines.join("\n");
 }
@@ -295,7 +328,6 @@ export default {
 
         const title = String(body?.title || "").trim().slice(0, 100);
         const description = String(body?.description || "").trim().slice(0, 6000);
-        const contact = String(body?.contact || "").trim().slice(0, 80);
         const category = ["bug", "compat", "feature"].includes(body?.category)
           ? body.category
           : "bug";
@@ -335,17 +367,13 @@ export default {
         const record = {
           id,
           category,
-          title: finalTitle,
-          description: description || finalTitle,
-          contact,
+          title: publicFeedbackText(finalTitle) || "玩家匿名反馈",
+          description: publicFeedbackText(description || finalTitle),
           platform,
           app_version: appVersion,
           created_at: new Date().toISOString(),
           created_at_bj: bjIso,
-          diagnostic:
-            body?.diagnostic && typeof body.diagnostic === "object"
-              ? body.diagnostic
-              : null,
+          diagnostic: publicDiagnostic(body?.diagnostic),
         };
 
         let issueUrl = null;
@@ -365,10 +393,7 @@ export default {
                   "X-GitHub-Api-Version": "2022-11-28",
                   "Content-Type": "application/json",
                 },
-                body: JSON.stringify({
-                  title: `[玩家反馈] ${record.title}`,
-                  body: formatIssueMarkdown(record),
-                }),
+                body: JSON.stringify(publicIssue(record)),
               },
             );
             if (ghResp.ok) {
@@ -431,10 +456,14 @@ export default {
         for (const k of list.keys) {
           const val = await kv.get(k.name, "json");
           if (val) {
+            const issue = publicIssue(val);
             items.push({
               kv_key: k.name,
-              ...val,
-              markdown: formatIssueMarkdown(val),
+              id: val.id,
+              category: val.category,
+              title: publicFeedbackText(val.title) || "玩家匿名反馈",
+              markdown: issue.body,
+              public_issue_version: 1,
             });
           }
         }

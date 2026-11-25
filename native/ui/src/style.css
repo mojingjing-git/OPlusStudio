@@ -3959,6 +3959,20 @@ html[data-theme="dark"] .curve-deadzone-fill.outer {
   pointer-events: none !important;
 }
 
+.feedback-preview {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.feedback-preview p {
+  margin: 0.25rem 0;
+  white-space: pre-wrap;
+}
+
+.feedback-preview summary {
+  cursor: pointer;
+}
+
 .feedback-check {
   display: flex;
   align-items: flex-start;

@@ -8,7 +8,6 @@ import {
   Send,
   X,
 } from "lucide-react";
-import { isWebBluetoothSupported } from "./backend";
 import {
   type FeedbackCategory,
   type FeedbackReceipt,
@@ -18,21 +17,18 @@ import {
   submitAnonymousFeedback,
 } from "./telemetry";
 import { APP_VERSION, type View } from "./types";
-import { diagnosticBundle } from "./web/model";
 
 export default function FeedbackModal({
   close,
   isTauri,
   view,
   lastError,
-  address,
   onStatsUpdate,
 }: {
   close: () => void;
   isTauri: boolean;
   view: View | null;
   lastError?: string;
-  address?: string;
   onStatsUpdate?: (stats: PublicStats) => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -41,12 +37,9 @@ export default function FeedbackModal({
 
   const [category, setCategory] = useState<FeedbackCategory>(initialCategory);
   const [title, setTitle] = useState("");
-  const [description, setDescription] = useState(() =>
-    lastError ? `[最近提示] ${lastError}\n\n` : "",
-  );
-  const [contact, setContact] = useState("");
+  const [description, setDescription] = useState("");
   const [website, setWebsite] = useState("");
-  const [attachDiag, setAttachDiag] = useState(true);
+  const [attachDiag, setAttachDiag] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [receipt, setReceipt] = useState<FeedbackReceipt | null>(null);
@@ -56,40 +49,28 @@ export default function FeedbackModal({
     ref.current?.showModal();
   }, []);
 
-  const hasEnvContext = Boolean(view || lastError || address);
-
-  const buildDiagnosticObject = (): Record<string, unknown> | null => {
-    if (!attachDiag) return null;
-    if (view) {
-      try {
-        const bundle = diagnosticBundle(view.snapshot) as Record<
-          string,
-          unknown
-        >;
-        if (lastError) {
-          bundle.last_ui_error = lastError;
-        }
-        bundle.runtime = isTauri ? "tauri-desktop" : "web-driver";
-        return bundle;
-      } catch {
-        // Fallback below if snapshot bundle fails
-      }
-    }
-    if (!hasEnvContext) return null;
-    return {
-      format: "oplus-env-diagnostic-v1",
-      app_version: APP_VERSION,
-      runtime: isTauri ? "tauri-desktop" : "web-driver",
-      web_bluetooth_supported: isTauri || isWebBluetoothSupported(),
-      address: address || null,
-      last_error: lastError || null,
-    };
-  };
+  const publicText = (input: string) =>
+    input.trim().startsWith("[最近提示]") ? "" : input.trim();
+  const publicTitle = publicText(title);
+  const publicDescription = publicText(description);
+  const { vid, pid, version_display } = view?.snapshot.identity || {};
+  const hexId = (value?: string) => typeof value === "string" && /^[0-9a-f]{4}$/i.test(value);
+  const modelIds = hexId(vid) && hexId(pid) ? { vid, pid } : null;
+  const firmware =
+    version_display && /^[0-9]{1,3}(\.[0-9]{1,3}){1,2}$/.test(version_display)
+      ? version_display : null;
+  const diagnostic = attachDiag && view ? {
+    identity: { ...modelIds, ...(firmware ? { version_display: firmware } : {}) },
+    support_tier: view.support_tier,
+  } : null;
+  const previewTitle = publicTitle.length >= 2
+    ? publicTitle
+    : publicDescription.split(/\r?\n/)[0].slice(0, 50);
 
   const handleSubmit = async () => {
     if (submitting) return;
     setSubmitError("");
-    if (title.trim().length < 2 && description.trim().length < 4) {
+    if (publicTitle.length < 2 && publicDescription.length < 4) {
       setSubmitError("请简单填写问题标题或现象描述");
       return;
     }
@@ -97,12 +78,11 @@ export default function FeedbackModal({
     try {
       const res = await submitAnonymousFeedback({
         category,
-        title: title.trim(),
-        description: description.trim(),
-        contact: contact.trim(),
+        title: publicTitle,
+        description: publicDescription,
         platform: isTauri ? "desktop" : "web",
         app_version: APP_VERSION,
-        diagnostic: buildDiagnosticObject(),
+        diagnostic,
         website,
       });
       setReceipt(res);
@@ -158,8 +138,7 @@ export default function FeedbackModal({
           </div>
           <h3>反馈已收到，无需任何账号操作</h3>
           <p>
-            系统已将你的反馈加密写入云端队列，会自动转为项目的 GitHub Issue
-            供开发者跟进。
+            反馈已接收，将同步到项目的公开 GitHub Issue。
           </p>
           <div className="receipt-code-row">
             <span>回执编号</span>
@@ -186,8 +165,8 @@ export default function FeedbackModal({
       ) : (
         <div className="feedback-form">
           <p className="feedback-lead">
-            无需注册 GitHub 账号，国内网络直连提交后将自动同步至开发者 Issue
-            面板。
+            无需注册 GitHub 账号。你填写的标题和描述会公开显示在 GitHub Issues，
+            请勿填写邮箱、QQ、设备序列号或其他隐私信息。
           </p>
 
           <div className="segmented feedback-cats" role="radiogroup">
@@ -237,17 +216,6 @@ export default function FeedbackModal({
             />
           </label>
 
-          <label className="feedback-field">
-            <span>称呼或回访方式（选填）</span>
-            <input
-              type="text"
-              maxLength={80}
-              placeholder="例如：B站昵称 / 邮箱 / QQ，方便修复后留言通知你"
-              value={contact}
-              onChange={(e) => setContact(e.target.value)}
-            />
-          </label>
-
           {/* Honeypot anti-bot field */}
           <input
             type="text"
@@ -260,30 +228,33 @@ export default function FeedbackModal({
             onChange={(e) => setWebsite(e.target.value)}
           />
 
-          {hasEnvContext && (
+          {view && (
             <label className="feedback-check">
               <input
                 type="checkbox"
                 checked={attachDiag}
                 onChange={(e) => setAttachDiag(e.target.checked)}
               />
-              <span>
-                {view ? (
-                  <>
-                    自动附带当前手柄兼容诊断包（
-                    <strong>
-                      {view.snapshot.decoded.device_name ||
-                        view.snapshot.address}
-                    </strong>{" "}
-                    · 固件 {view.snapshot.identity.version_display}
-                    ，不含电脑隐私路径）
-                  </>
-                ) : (
-                  <>自动附带当前运行环境与最近报错摘要（不含个人隐私数据）</>
-                )}
-              </span>
+              <span>附上手柄兼容摘要（型号编码、固件版本和支持分级）</span>
             </label>
           )}
+
+          <details className="feedback-preview" open>
+            <summary>公开内容预览</summary>
+            <strong>{previewTitle ? `[玩家反馈] ${previewTitle}` : "（未填写）"}</strong>
+            <p>{publicDescription || previewTitle || "（未填写）"}</p>
+            {diagnostic && (
+              <p>
+                {modelIds && `型号编码 ${modelIds.vid}:${modelIds.pid} · `}
+                {firmware && `固件 ${firmware} · `}
+                支持分级 {diagnostic.support_tier}
+              </p>
+            )}
+            <small>
+              {isTauri ? "Windows 桌面版" : "在线网页驱动"} · v{APP_VERSION}。
+              公开 Issue 还会显示反馈类型、回执号和提交时间。
+            </small>
+          </details>
 
           {submitError && (
             <p className="field-error" role="alert">
@@ -316,7 +287,7 @@ export default function FeedbackModal({
                 ) : (
                   <Send size={16} />
                 )}
-                {submitting ? "正在提交…" : "免登录直接提交"}
+                {submitting ? "正在提交…" : "提交公开反馈"}
               </button>
             </div>
           </div>

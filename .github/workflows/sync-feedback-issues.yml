@@ -79,14 +79,21 @@ jobs:
 
             const acked = [];
             for (const item of items) {
+              // A stale relay or partial response must not publish unsanitized feedback.
+              if (item?.public_issue_version !== 1 || typeof item.title !== "string" ||
+                  !item.title || typeof item.markdown !== "string" || !item.markdown) {
+                console.error("Skipping a queue item without a sanitized public payload.");
+                process.exitCode = 1;
+                continue;
+              }
               const labels = ["玩家反馈"];
               if (item.category === "compat") labels.push("手柄兼容");
               else if (item.category === "feature") labels.push("enhancement");
               else labels.push("bug");
 
               const created = await ghRequest(`/repos/${repo}/issues`, "POST", {
-                title: `[玩家反馈] ${item.title || item.id}`,
-                body: item.markdown || item.description || "匿名反馈",
+                title: `[玩家反馈] ${item.title}`,
+                body: item.markdown,
                 labels,
               });
 

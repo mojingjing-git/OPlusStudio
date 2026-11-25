@@ -1580,7 +1580,7 @@ export default function App() {
                 </div>
                 <p>
                   遇到型号连接异常、功能建议或兼容性问题，无需注册 GitHub
-                  账号即可直接上传反馈（可自动附带当前手柄兼容诊断快照）。
+                  账号即可提交公开反馈，也可以选择附上手柄兼容摘要。
                 </p>
                 {publicStats && (
                   <div className="telemetry-grid">
@@ -2131,7 +2131,6 @@ export default function App() {
           isTauri={isTauri}
           view={view}
           lastError={error}
-          address={address}
           onStatsUpdate={setPublicStats}
         />
       )}
