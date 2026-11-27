@@ -278,6 +278,7 @@ export default function KeymapPage({
     value: string;
   } | null>(null);
   const [desktopGuideOpen, setDesktopGuideOpen] = useState(false);
+  const [adminTipHidden, setAdminTipHidden] = useState(false);
   const [showCustomChord, setShowCustomChord] = useState(false);
   const [showThresholds, setShowThresholds] = useState(false);
   const [pickAddToken, setPickAddToken] = useState<OutputToken>("Space");
@@ -562,10 +563,13 @@ export default function KeymapPage({
                     }
                   />
                   {runnerStateText(runner)}
+                  {runner.is_elevated && (
+                    <span className="admin-elevated-pill">管理员权限已就绪</span>
+                  )}
                 </strong>
                 <small>
-                  全局急停热键：<code>F8</code>
-                  （立即停止循环并释放全部键鼠按键）
+                  支持 2.4G 接收器 / 有线免蓝牙即用（开启后保持后台最小化） · 全局急停：
+                  <code>F8</code>
                 </small>
               </div>
             </>
@@ -683,6 +687,43 @@ export default function KeymapPage({
           </div>
         )}
       </section>
+
+      {!adminTipHidden && (!isTauri || !runner.is_elevated) && (
+        <div className="message admin-tip-banner" role="note">
+          <Info size={18} />
+          <span>
+            {isTauri ? (
+              <>
+                <strong>记事本能打出按键、进游戏却没反应？</strong>{" "}
+                多数游戏与启动器默认以管理员权限运行，会拦截普通程序发出的模拟按键。遇到此情况请退出软件后，
+                <strong>
+                  右键 <code>OPlusStudio.Native.exe</code> → 选择「以管理员身份运行」
+                </strong>{" "}
+                即可解决。
+              </>
+            ) : (
+              <>
+                <strong>桌面版游戏内生效提示（2.4G / 有线均可用）：</strong>{" "}
+                运行桌面版开启键盘宏后请保持后台挂起；若遇到
+                <strong>记事本有反应但进游戏无效果</strong>
+                ，说明游戏以管理员权限运行——退出桌面版后{" "}
+                <strong>
+                  右键 <code>OPlusStudio.Native.exe</code> → 选择「以管理员身份运行」
+                </strong>{" "}
+                即可生效。
+              </>
+            )}
+          </span>
+          <button
+            type="button"
+            className="icon"
+            aria-label="关闭管理员权限提示"
+            onClick={() => setAdminTipHidden(true)}
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
 
       {runner.injection_warning && (
         <div className="message warning-banner" role="alert">
@@ -1671,8 +1712,16 @@ function DesktopMacroGuideModal({
         <li>
           <strong>免安装桌面版后台运行</strong>：下载解压{" "}
           <code>OPlusStudio-Windows-x64.zip</code>，运行{" "}
-          <code>OPlusStudio.Native.exe</code> 导入方案并点击“开启键盘宏引擎”，即可通过
-          USB / 2.4G 低延迟触发键鼠宏（内置 <code>F8</code> 全局紧急停止）。
+          <code>OPlusStudio.Native.exe</code> 导入方案并点击“开启键盘宏引擎”（使用期间保持软件最小化在后台），即可通过
+          USB / 2.4G 接收器低延迟触发键鼠宏（内置 <code>F8</code> 全局紧急停止）。
+        </li>
+        <li>
+          <strong>进游戏无反应排查（管理员权限）</strong>：若在 TXT
+          记事本能正常打出按键、切进游戏却没反应，说明游戏是以管理员权限启动的。请先退出桌面版，
+          <strong>
+            右键 <code>OPlusStudio.Native.exe</code> → 选择「以管理员身份运行」
+          </strong>
+          再开启开关即可生效。
         </li>
       </ol>
       <div className="dialog-actions">

@@ -1,6 +1,10 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+if exist "releases\0.7.4\OPlusStudio\OPlusStudio.Native.exe" (
+  start "" "releases\0.7.4\OPlusStudio\OPlusStudio.Native.exe"
+  exit /b
+)
 if exist "releases\0.7.3\OPlusStudio\OPlusStudio.Native.exe" (
   start "" "releases\0.7.3\OPlusStudio\OPlusStudio.Native.exe"
   exit /b

@@ -30,6 +30,40 @@ pub struct RunnerSnapshot {
     pub injection_warning: Option<String>,
     #[serde(default)]
     pub load_error: Option<String>,
+    #[serde(default)]
+    pub is_elevated: bool,
+}
+
+#[cfg(windows)]
+fn is_process_elevated() -> bool {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::Security::{
+        GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    unsafe {
+        let mut token = std::ptr::null_mut();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 || token.is_null() {
+            return false;
+        }
+        let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+        let mut ret_len = 0u32;
+        let ok = GetTokenInformation(
+            token,
+            TokenElevation,
+            (&mut elevation as *mut TOKEN_ELEVATION).cast(),
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut ret_len,
+        );
+        let _ = CloseHandle(token);
+        ok != 0 && elevation.TokenIsElevated != 0
+    }
+}
+
+#[cfg(not(windows))]
+fn is_process_elevated() -> bool {
+    false
 }
 
 impl Default for RunnerSnapshot {
@@ -46,6 +80,7 @@ impl Default for RunnerSnapshot {
             blocked_count: 0,
             injection_warning: None,
             load_error: None,
+            is_elevated: is_process_elevated(),
         }
     }
 }
@@ -798,8 +833,13 @@ fn worker_loop(shared: Arc<Shared>) {
                 if blocked > 0 {
                     ctrl.snapshot.blocked_count += blocked;
                     ctrl.snapshot.injection_warning = Some(
-                        "目标窗口拒绝模拟输入（可能因管理员权限隔离 UIPI 或反作弊保护），已自动放弃注入。"
-                            .into(),
+                        if ctrl.snapshot.is_elevated {
+                            "目标游戏窗口拒绝模拟按键（该游戏启用了内核反作弊驱动保护），已自动放弃注入。"
+                                .into()
+                        } else {
+                            "游戏窗口拦截了模拟按键：若在记事本生效但游戏内无反应，请先退出本软件，右键 OPlusStudio.Native.exe 选择「以管理员身份运行」后再试。"
+                                .into()
+                        },
                     );
                 }
             }

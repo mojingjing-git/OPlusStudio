@@ -2358,8 +2358,33 @@ html[data-theme="light"] .tier-verified {
 
 .engine-status strong {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  gap: 0.45rem;
   font-size: 0.85rem;
+}
+
+.admin-elevated-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.08rem 0.52rem;
+  border-radius: 999px;
+  font-size: 0.71rem;
+  font-weight: 660;
+  background: var(--emerald-tint);
+  color: var(--emerald);
+  border: 1px solid var(--emerald);
+}
+
+.admin-tip-banner {
+  background: var(--accent-tint);
+  border-color: var(--accent-border);
+  color: var(--text);
+}
+
+.admin-tip-banner > svg {
+  color: var(--accent);
+  flex-shrink: 0;
 }
 
 .engine-status small {

@@ -1,9 +1,9 @@
 {
   "$schema":"https://schema.tauri.app/config/2",
   "productName":"O+ Studio",
-  "version":"0.7.3",
+  "version":"0.7.4",
   "identifier":"studio.oplus.desktop",
   "build":{"frontendDist":"../ui/dist","devUrl":"http://localhost:1420","beforeDevCommand":"npm --prefix ../ui run dev","beforeBuildCommand":"npm --prefix ../ui run build"},
-  "app":{"windows":[{"label":"main","title":"O+ Studio 0.7.3","width":1320,"height":880,"minWidth":900,"minHeight":650,"resizable":true}],"security":{"csp":"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost https://oplus.20000102.online; font-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'"}},
+  "app":{"windows":[{"label":"main","title":"O+ Studio 0.7.4","width":1320,"height":880,"minWidth":900,"minHeight":650,"resizable":true}],"security":{"csp":"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost https://oplus.20000102.online; font-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'"}},
   "bundle":{"active":false,"shortDescription":"Universal ZD O+ onboard configuration & native keymap studio","license":"GPL-3.0-or-later"}
 }

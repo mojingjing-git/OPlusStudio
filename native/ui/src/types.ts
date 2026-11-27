@@ -1,4 +1,4 @@
-export const APP_VERSION = "0.7.3";
+export const APP_VERSION = "0.7.4";
 
 export type Change =
   | { kind: "hold"; keys: number[] }
@@ -661,4 +661,5 @@ export type RunnerSnapshot = {
   blocked_count: number;
   injection_warning: string | null;
   load_error?: string | null;
+  is_elevated?: boolean;
 };
