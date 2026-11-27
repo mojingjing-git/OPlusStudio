@@ -968,6 +968,12 @@ describe("4. Keymap Validation, 0.4.0 Migration, W3C Gamepad & Simulated WebBLE 
                 recordStore[key] = writeAssembler[key].slice(1);
               }
               emitReply(plain.serial, [0]);
+            } else if (plain.opcode === 0x1d) {
+              emitReply(plain.serial, [
+                0x09, 0xdf, 0xaa, 0x0f, 0x50, 0xe8, 0x00, 0x00, 0x00, 0x5e,
+              ]);
+            } else if (plain.opcode === 0x1e) {
+              emitReply(plain.serial, [0x02, 0xdf, 0xaa]);
             }
           }, 1);
         },
@@ -1014,6 +1020,11 @@ describe("4. Keymap Validation, 0.4.0 Migration, W3C Gamepad & Simulated WebBLE 
       const readSnap = await session.snapshot();
       assert.equal(supportTier(readSnap), "verified");
       assert.equal(readSnap.decoded.device_name, "致动O+_123456");
+      assert.deepEqual(readSnap.decoded.battery, {
+        level: 3,
+        charging: true,
+        raw_status: 0x50,
+      });
 
       // Execute multi-chunk lighting write + macro_0 write with readback verification!
       const store = createMemoryStorage();
@@ -1695,9 +1706,13 @@ describe("6. v0.7.1 Audit Regressions: Wrong-Device Guard, Durable IDB, Cross-Ta
           full = snapshotRecord(fixtureSnap, "lighting");
         } else if (req.opcode === 0xb5) {
           full = snapshotRecord(fixtureSnap, `macro_${req.payload[1]}`);
+        } else if (req.opcode === 0x1d) {
+          full = [0x09, 0xdf, 0xaa, 0x00, 0x40, 0xcd, 0x2e, 0x00, 0x00, 0x5e];
+        } else if (req.opcode === 0x1e) {
+          full = [0x02, 0xdf, 0xaa];
         }
         const slice =
-          req.opcode === 0x91
+          req.opcode === 0x91 || req.opcode === 0x1d || req.opcode === 0x1e
             ? full
             : full.slice(page * 15, (page + 1) * 15);
         const reply = Uint8Array.from(frame(0x19, slice, req.serial, 9, null));

@@ -86,6 +86,7 @@ pub struct Session {
     pub address: String,
     pub local_name: Option<String>,
     pub is_oplus: bool,
+    power_query_unsupported: bool,
     pub can_write: bool,
     pub writable_slots: Vec<u8>,
     serial: u32,
@@ -163,6 +164,7 @@ impl Session {
                 address: address.to_uppercase(),
                 local_name,
                 is_oplus: false,
+                power_query_unsupported: false,
                 can_write: false,
                 writable_slots: vec![],
                 serial: 0,
@@ -197,6 +199,10 @@ impl Session {
     }
 
     async fn exchange(&mut self, wire: Vec<u8>) -> Result<Packet> {
+        self.exchange_timeout(wire, Duration::from_secs(3)).await
+    }
+
+    async fn exchange_timeout(&mut self, wire: Vec<u8>, wait: Duration) -> Result<Packet> {
         let sent = p::parse(&wire)?;
         self.push_trace(json!({
             "direction": "tx",
@@ -210,7 +216,7 @@ impl Session {
         } else {
             WriteType::WithoutResponse
         };
-        timeout(Duration::from_secs(3), async {
+        timeout(wait, async {
             self.peripheral
                 .write(&self.write_char, &wire, mode)
                 .await
@@ -236,6 +242,35 @@ impl Session {
         })
         .await
         .map_err(|_| "手柄响应超时，请保持开机并关闭手机 KeyLinker".to_string())?
+    }
+
+    async fn read_battery(&mut self) -> Option<p::BatteryStatus> {
+        if self.power_query_unsupported {
+            return None;
+        }
+        self.serial += 1;
+        let enter_serial =
+            (self.serial % 128) as u8 | if self.serial.is_multiple_of(2) { 128 } else { 0 };
+        let enter_wire = p::power_control_frame(false, enter_serial, self.nonce()).ok()?;
+        let reply = self
+            .exchange_timeout(enter_wire, Duration::from_millis(750))
+            .await;
+        // Immediately restore NORMAL_MODE (0x1E 02 DF AB) so live 0x1F streaming stops cleanly
+        self.serial += 1;
+        let exit_serial =
+            (self.serial % 128) as u8 | if self.serial.is_multiple_of(2) { 128 } else { 0 };
+        if let Ok(exit_wire) = p::power_control_frame(true, exit_serial, self.nonce()) {
+            let _ = self
+                .exchange_timeout(exit_wire, Duration::from_millis(600))
+                .await;
+        }
+        match reply {
+            Ok(pkt) => p::parse_power_reply(&pkt.payload),
+            Err(_) => {
+                self.power_query_unsupported = true;
+                None
+            }
+        }
     }
 
     async fn query(&mut self, opcode: u8, payload: &[u8]) -> Result<Packet> {
@@ -359,6 +394,9 @@ impl Device for Session {
                     }
                     raw.insert(name.into(), r);
                 }
+            }
+            if let Some(batt) = self.read_battery().await {
+                decoded.insert("battery".into(), json!(batt));
             }
             errors.push(format!(
                 "设备协议有效代际为 {}（非 KeyLinker 第二代协议），已开放只读查看与诊断导出",
@@ -495,6 +533,10 @@ impl Device for Session {
                 }
                 Err(e) => errors.push(format!("读取 macro_{slot} 失败：{e}")),
             }
+        }
+
+        if let Some(batt) = self.read_battery().await {
+            decoded.insert("battery".into(), json!(batt));
         }
 
         let mut snapshot = Snapshot {

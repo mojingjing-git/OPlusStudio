@@ -21,6 +21,7 @@ import {
   supportTier,
 } from "./model.ts";
 import {
+  type BatteryInfo,
   type Identity,
   NOTIFY,
   type Packet,
@@ -35,6 +36,8 @@ import {
   nameClaimsOPlus,
   parse,
   parseIdentity,
+  parsePowerReply,
+  powerControlFrame,
   query,
   sameIdentity,
   saveSerial,
@@ -483,6 +486,7 @@ export class WebBleSession implements Device {
   public readonly deviceId: string;
   public address: string;
   public isOPlus = false;
+  private powerQueryUnsupported = false;
   public canWrite = false;
   public writableSlots: number[] = [];
   public trace: Record<string, unknown>[] = [];
@@ -640,7 +644,10 @@ export class WebBleSession implements Device {
     }
   }
 
-  private async exchange(wire: Uint8Array): Promise<Packet> {
+  private async exchange(
+    wire: Uint8Array,
+    timeoutOverrideMs?: number,
+  ): Promise<Packet> {
     return this.enqueueGatt(async () => {
       const sent = parse(wire);
       this.pushTrace({
@@ -675,10 +682,11 @@ export class WebBleSession implements Device {
           this.pendingExchange = entryRef;
         });
 
+        const waitMs = timeoutOverrideMs ?? this.requestTimeoutMs;
         const timeoutPromise = new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
             reject(new Error("手柄响应超时，请保持开机并关闭手机 KeyLinker"));
-          }, this.requestTimeoutMs);
+          }, waitMs);
         });
 
         writePromise = this.writeWire(wire).finally(() => {
@@ -747,6 +755,33 @@ export class WebBleSession implements Device {
       throw new Error("记录声明长度与分段响应不一致");
     }
     return makeRecord(data);
+  }
+
+  private async readBattery(): Promise<BatteryInfo | undefined> {
+    if (this.powerQueryUnsupported) return undefined;
+    this.serial += 1;
+    const enterSerial =
+      ((this.serial % 128) | (this.serial % 2 === 0 ? 128 : 0)) & 0xff;
+    const enterWire = powerControlFrame(false, enterSerial, this.nonce());
+    const fastTimeout = Math.min(this.requestTimeoutMs, 750);
+    let reply: Packet | null = null;
+    try {
+      reply = await this.exchange(enterWire, fastTimeout);
+    } catch {
+      this.powerQueryUnsupported = true;
+    }
+    // Immediately restore NORMAL_MODE (0x1E 02 DF AB) so live 0x1F streaming stops cleanly
+    this.serial += 1;
+    const exitSerial =
+      ((this.serial % 128) | (this.serial % 2 === 0 ? 128 : 0)) & 0xff;
+    const exitWire = powerControlFrame(true, exitSerial, this.nonce());
+    try {
+      await this.exchange(exitWire, Math.min(this.requestTimeoutMs, 600));
+    } catch {
+      // Ignore if device does not ack NORMAL_MODE
+    }
+    if (!reply) return undefined;
+    return parsePowerReply(reply.payload) ?? undefined;
   }
 
   private async readSnapshotRecord(
@@ -838,6 +873,10 @@ export class WebBleSession implements Device {
         } catch {
           // Optional on non-Gen2
         }
+      }
+      const batt = await this.readBattery();
+      if (batt) {
+        decoded.battery = batt;
       }
       errors.push(
         `设备协议有效代际为 ${effGen}（非 KeyLinker 第二代协议），已开放只读查看与诊断导出`,
@@ -986,6 +1025,11 @@ export class WebBleSession implements Device {
           `读取 macro_${slot} 失败：${e instanceof Error ? e.message : String(e)}`,
         );
       }
+    }
+
+    const batt = await this.readBattery();
+    if (batt) {
+      decoded.battery = batt;
     }
 
     const snap: Snapshot = {

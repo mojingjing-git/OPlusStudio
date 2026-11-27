@@ -257,6 +257,43 @@ pub fn decode_keys(data: &[u8]) -> Result<Vec<u8>> {
     Ok(keys)
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BatteryStatus {
+    pub level: u8,
+    pub charging: bool,
+    pub raw_status: u8,
+}
+
+/// Builds the fixed 3-byte KeyLinker power/status enter (`0x1D 02 DF AB`) or exit (`0x1E 02 DF AB`) frame.
+pub fn power_control_frame(stop: bool, serial: u8, nonce: u8) -> Result<Vec<u8>> {
+    let opcode = if stop { 0x1e } else { 0x1d };
+    frame(opcode, &[0x02, 0xdf, 0xab], serial, nonce, None)
+}
+
+/// Decodes the 4-bar battery gauge (`1..=4`) and charging flag from a `0x1D 02 DF AB` `0x19` reply payload.
+/// Verified against live ZD O+ captures (`0x40` wireless 3/4, `0x50` USB charging 3/4) and KeyLinker (`0x90` charging 4/4).
+pub fn parse_power_reply(payload: &[u8]) -> Option<BatteryStatus> {
+    if payload.len() < 5 || payload[1] != 0xdf || payload[2] != 0xaa {
+        return None;
+    }
+    let status = payload[4];
+    let charging = (status & 0x10) != 0;
+    let level = if (status & 0x80) != 0 {
+        4
+    } else if (status & 0x40) != 0 {
+        3
+    } else if (status & 0x20) != 0 {
+        2
+    } else {
+        1
+    };
+    Some(BatteryStatus {
+        level,
+        charging,
+        raw_status: status,
+    })
+}
+
 pub fn decode_macro_limits(data: &[u8]) -> Result<Vec<u16>> {
     if !data.len().is_multiple_of(2) {
         return Err("每槽宏步数记录长度无效".into());
@@ -334,5 +371,32 @@ mod tests {
             vec![42, 47, 0]
         );
         assert!(decode_macro_limits(&[42, 0, 1]).is_err());
+
+        // Verified ZD O+ wireless (0x40 = 3/4) and USB charging (0x50 = 3/4 charging) + full charging (0x90 = 4/4)
+        assert_eq!(
+            parse_power_reply(&[0x09, 0xdf, 0xaa, 0x00, 0x40, 0xcd, 0x2e, 0x00, 0x00, 0x5e]),
+            Some(BatteryStatus {
+                level: 3,
+                charging: false,
+                raw_status: 0x40
+            })
+        );
+        assert_eq!(
+            parse_power_reply(&[0x09, 0xdf, 0xaa, 0x0f, 0x50, 0xe8, 0x00, 0x00, 0x00, 0x5e]),
+            Some(BatteryStatus {
+                level: 3,
+                charging: true,
+                raw_status: 0x50
+            })
+        );
+        assert_eq!(
+            parse_power_reply(&[0x09, 0xdf, 0xaa, 0x00, 0x90, 0x00, 0x00, 0x00, 0x00, 0x5e]),
+            Some(BatteryStatus {
+                level: 4,
+                charging: true,
+                raw_status: 0x90
+            })
+        );
+        assert_eq!(parse_power_reply(&[0x02, 0xdf, 0xaa]), None);
     }
 }

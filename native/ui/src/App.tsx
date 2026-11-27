@@ -40,6 +40,7 @@ import {
   FileSpreadsheet,
   MessageSquarePlus,
   Users,
+  Zap,
 } from "lucide-react";
 import CurvesPage from "./CurvesPage";
 import FeedbackModal from "./FeedbackModal";
@@ -989,6 +990,7 @@ export default function App() {
         ? ["动态兼容", "tier-compatible"]
         : ["只读模式", "tier-readonly"]
     : null;
+  const battery = view?.snapshot.decoded.battery || null;
 
   const linkedSlotSet = new Set(
     (activeKeymapProfile?.rules || [])
@@ -1112,6 +1114,33 @@ export default function App() {
                 {tierBadge && (
                   <span className={`tier-badge ${tierBadge[1]}`}>
                     {tierBadge[0]}
+                  </span>
+                )}
+                {battery && (
+                  <span
+                    className={
+                      "battery-pill " +
+                      (battery.level <= 1
+                        ? "low"
+                        : battery.level === 2
+                          ? "mid"
+                          : "ok") +
+                      (battery.charging ? " is-charging" : "")
+                    }
+                    title={`手柄上报 ${battery.level}/4 格电量${battery.charging ? "（充电/供电中）" : ""} · 状态码 0x${battery.raw_status.toString(16).padStart(2, "0").toUpperCase()} · 点击“重新读取”可刷新（建议使用电脑 USB 口或 5V 慢充，避免手机快充头触发过压保护卡在第 3 格闪烁）`}
+                  >
+                    <span className="battery-bars" aria-hidden="true">
+                      {[1, 2, 3, 4].map((bar) => (
+                        <i
+                          key={bar}
+                          className={bar <= battery.level ? "filled" : ""}
+                        />
+                      ))}
+                    </span>
+                    {battery.charging && <Zap size={12} />}
+                    <span>
+                      {battery.level}/4{battery.charging ? " 充电中" : ""}
+                    </span>
                   </span>
                 )}
               </strong>
@@ -1754,6 +1783,12 @@ export default function App() {
                       {view.snapshot.identity.vid} /{" "}
                       {view.snapshot.identity.pid} ·{" "}
                       {view.snapshot.identity.version_display}
+                    </dd>
+                    <dt>电池与供电状态</dt>
+                    <dd>
+                      {battery
+                        ? `${battery.level} / 4 格（约 ${battery.level * 25}%）· ${battery.charging ? "充电 / USB 供电中" : "无线放电中"}（0x${battery.raw_status.toString(16).padStart(2, "0").toUpperCase()}）`
+                        : "未上报"}
                     </dd>
                     <dt>支持等级</dt>
                     <dd>{view.support_tier}</dd>

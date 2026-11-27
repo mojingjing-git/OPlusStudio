@@ -357,6 +357,46 @@ export function decodeKeys(data: ByteSource): number[] {
   return keys;
 }
 
+export type BatteryInfo = {
+  level: number;
+  charging: boolean;
+  raw_status: number;
+};
+
+export function powerControlFrame(
+  stop: boolean,
+  serial: number,
+  nonce: number,
+): Uint8Array {
+  const opcode = stop ? 0x1e : 0x1d;
+  return frame(opcode, [0x02, 0xdf, 0xab], serial, nonce, null);
+}
+
+export function parsePowerReply(payload: ByteSource): BatteryInfo | null {
+  if (
+    payload.length < 5 ||
+    (payload[1] & 0xff) !== 0xdf ||
+    (payload[2] & 0xff) !== 0xaa
+  ) {
+    return null;
+  }
+  const status = payload[4] & 0xff;
+  const charging = (status & 0x10) !== 0;
+  const level =
+    (status & 0x80) !== 0
+      ? 4
+      : (status & 0x40) !== 0
+        ? 3
+        : (status & 0x20) !== 0
+          ? 2
+          : 1;
+  return {
+    level,
+    charging,
+    raw_status: status,
+  };
+}
+
 export function decodeMacroLimits(data: ByteSource): number[] {
   if (data.length % 2 !== 0) {
     throw new Error("每槽宏步数记录长度无效");

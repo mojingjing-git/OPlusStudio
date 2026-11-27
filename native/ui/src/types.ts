@@ -1,4 +1,4 @@
-export const APP_VERSION = "0.7.4";
+export const APP_VERSION = "0.7.5";
 
 export type Change =
   | { kind: "hold"; keys: number[] }
@@ -58,6 +58,12 @@ export type BoardSetting =
   | { feature: "remapping"; source: number; target: number }
   | { feature: "lighting"; zone: number; rgb: string };
 
+export type BatteryInfo = {
+  level: number; // 1..4 bars
+  charging: boolean;
+  raw_status: number;
+};
+
 export type Snapshot = {
   address: string;
   device_id?: string;
@@ -72,6 +78,7 @@ export type Snapshot = {
   raw: Record<string, RecordData | undefined>;
   decoded: {
     device_name?: string;
+    battery?: BatteryInfo;
     all_keys?: number[];
     macro_keys?: number[];
     remap_keys?: number[];
